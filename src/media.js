@@ -1,0 +1,269 @@
+// Host side of <app>/media/1 - the CHANNEL, not the methods.
+//
+// THIS FILE IS THE SEAM THE WHOLE EXTRACTION TURNS ON.
+//
+// PearTune's `serveMedia` owned two things at once: the channel lifecycle, which
+// every app needs unchanged, and a fifty-case method table, which IS the app.
+// Audio methods are not video methods, and pretending otherwise would have meant
+// PearCinema inheriting `speaker.volume` and PearTune inheriting `subtitle.list`.
+//
+// So the split is: the package owns the channel, the registration order, the
+// presence registration, the scope chokepoint, backpressure, chunking, and the
+// typed-error contract. The consumer hands in a method table and a stream opener.
+//
+// WHY `media.stream` STAYS HERE. Gating a byte stream on a live grant is
+// security-critical and must not be reimplemented per app - it is the one method
+// where a mistake hands out the library rather than an error message. What the
+// adapter RETURNS is the app's business; what has to be true before a single byte
+// moves is not.
+//
+// We do NOT tunnel a raw port (PearTune DECISIONS 2026-07-13). A tunnel would hand
+// a guest the media server's entire surface plus its credentials, make per-request
+// scope enforcement impossible, and teach the app to speak someone else's protocol
+// - which would quietly demote the raw-folder adapter to a second-class citizen.
+// The host answers a normalized API and the adapters sit behind it.
+
+const Protomux = require('protomux')
+const b4a = require('b4a')
+
+const { CHUNK_SIZE, ERR, SCOPE } = require('./protocol/constants')
+
+// A handler's way of refusing with a TYPED code instead of a 500. Anything else a
+// handler throws is logged and answered EINTERNAL, because an unexpected exception
+// is not a message we want to hand a peer.
+class MethodError extends Error {
+  constructor (code, message) {
+    super(message || code)
+    this.code = code
+    this.name = 'MethodError'
+  }
+}
+
+const badParams = (m) => new MethodError(ERR.BAD_PARAMS, m || 'bad params')
+const notFound = (m) => new MethodError(ERR.NOT_FOUND, m || 'not found')
+const forbidden = (m) => new MethodError(ERR.FORBIDDEN, m || 'forbidden')
+
+// WHO owns the user state on this connection. Derived from the grant the firewall
+// looked up from the Noise-authenticated remote key - NEVER from a client parameter,
+// which is the whole reason host-as-hub is safe (there is nothing to forge). A device
+// assigned to a person owns state as that person (so their phone and tablet share it);
+// an unclaimed device is its own owner until the operator confirms a claim.
+function ownerOf (grant) {
+  return grant.personId ? 'p:' + grant.personId : 'd:' + grant.deviceKey
+}
+
+// The methods the package itself enforces as mutating. Consumers add their own via
+// `mutating`; they never REPLACE this set, so a new app cannot ship having quietly
+// dropped one.
+const BASE_MUTATING = new Set(['media.stream.write'])
+
+function serveMedia ({
+  protocol,
+  conn,
+  libraryId,
+  grant,
+
+  // name -> async (ctx) => body | undefined.
+  //
+  // Returning undefined means "I already answered" (via ctx.reply, ctx.stream or
+  // deliberate silence). Returning anything else sends it as the response body,
+  // which is what makes the common handler a one-liner.
+  methods = {},
+
+  // Method names a READONLY grant may not call. Refused at this chokepoint rather
+  // than at the adapter, so a new mutating method cannot accidentally ship without
+  // a scope check.
+  mutating = [],
+
+  // async (params, ctx) => Readable | null. Serves media.stream. Returning null is
+  // ENOTFOUND; throwing a MethodError is that code; the package does the rest.
+  // Absent means this host serves no byte streams at all, and media.stream is
+  // ENOMETHOD rather than a crash.
+  openStream = null,
+
+  // Called with the streamed item's params after the stream opens. THIS host is the
+  // one serving these bytes, which is the only thing it knows for certain about what
+  // a device is playing.
+  onStream = null,
+
+  presence = null,
+  log = () => {}
+}) {
+  if (!protocol || !protocol.channels) throw new Error('serveMedia needs a protocol from createProtocol()')
+  if (!grant) throw new Error('serveMedia needs the grant the firewall authenticated')
+
+  const mutatingSet = new Set([...BASE_MUTATING, ...mutating])
+  const mux = Protomux.from(conn)
+
+  // Set once the channel is open (below). Called on close to drop this connection's push
+  // sender from the presence registry, so a dead channel is never pushed to.
+  let unregisterPresence = () => {}
+
+  // Registration order is fixed in protocol/channels.js and MUST match the client's.
+  // Do not hand-roll addMessage here - see the note in that file.
+  const built = protocol.channels.mediaChannel(mux, {
+    id: b4a.from(libraryId),
+    onclose: () => { unregisterPresence(); log('media:channel-closed') },
+    onreq: async (m) => {
+      try {
+        await dispatch(m)
+      } catch (e) {
+        if (e instanceof MethodError) return safeErr(m?.id ?? 0, e.code, e.message)
+        log('media:dispatch-failed', { method: m?.method, err: e?.message })
+        safeErr(m?.id ?? 0, ERR.INTERNAL, 'internal error')
+      }
+    }
+  })
+
+  if (!built) return null
+
+  const { channel } = built
+  const send = built.messages
+
+  channel.open()
+
+  const owner = ownerOf(grant)
+
+  // This connection is now reachable by an unsolicited push. Keyed by the grant's device -
+  // the one the firewall authenticated - so a session claim on ANOTHER connection can reach it.
+  if (presence) {
+    unregisterPresence = presence.register(
+      grant.deviceKey,
+      (evt) => { try { send.push.send(evt) } catch {} },
+      owner
+    )
+  }
+
+  function safeErr (id, code, message) {
+    try {
+      send.err.send({ id, code, message })
+    } catch {}
+  }
+
+  // Backpressure. Protomux `send()` returns false when the underlying stream is
+  // full; pushing a whole film through regardless would balloon memory on a
+  // Pi-class host. Wait for drain before the next frame.
+  function drain () {
+    return new Promise(resolve => conn.once('drain', resolve))
+  }
+
+  async function pipeStream (id, stream) {
+    let seq = 0
+    let total = 0
+    try {
+      for await (const buf of stream) {
+        // Frames are capped so a seek is never stuck behind one fat in-flight
+        // chunk, regardless of what the source hands us.
+        for (let off = 0; off < buf.length; off += CHUNK_SIZE) {
+          const slice = buf.subarray(off, Math.min(off + CHUNK_SIZE, buf.length))
+          const ok = send.chunk.send({ id, seq: seq++, data: slice })
+          total += slice.length
+          if (!ok) await drain()
+          // The channel closed under us - a revoke destroyed the connection. Stop
+          // reading the file, do not send an end frame, and let the socket's own
+          // teardown finish the job. This is the loop that must not keep pushing
+          // bytes at a device that was just cut off.
+          if (channel.closed) return
+        }
+      }
+      send.end.send({ id, total })
+    } catch (e) {
+      log('media:stream-failed', { id, err: e?.message })
+      safeErr(id, ERR.INTERNAL, 'stream failed')
+    }
+  }
+
+  function contextFor (m) {
+    const { id, method, params } = m
+    return {
+      id,
+      method,
+      params: params || {},
+      libraryId,
+      protocol,
+      log,
+
+      // The authenticated facts about this connection. Read these; never read an
+      // identity out of params.
+      grant,
+      scope: grant.scope,
+      owner,
+      deviceKey: grant.deviceKey,
+      isOwner: grant.scope === SCOPE.OWNER,
+
+      reply (body) { send.res.send({ id, body }) },
+      fail (code, message) { safeErr(id, code, message) },
+      stream (readable) { return pipeStream(id, readable) },
+
+      // Push to THIS device's other live connections.
+      push (kind, data = null) {
+        return presence ? presence.notify(grant.deviceKey, kind, data) : 0
+      },
+
+      // Push to this PERSON across all their devices. `exceptSelf` skips the device
+      // that made the change - it already re-rendered optimistically, and a push
+      // would fight its own update.
+      pushToOwner (kind, data = null, { exceptSelf = true } = {}) {
+        if (!presence) return 0
+        return presence.notifyOwner(owner, kind, data,
+          { exceptDevice: exceptSelf ? grant.deviceKey : null })
+      },
+
+      presence,
+      badParams,
+      notFound,
+      forbidden,
+      MethodError
+    }
+  }
+
+  async function dispatch (m) {
+    const { id, method } = m
+
+    // The scope chokepoint. One place, ahead of every handler, so a new mutating
+    // method cannot ship without it.
+    if (mutatingSet.has(method) && grant?.scope === SCOPE.READONLY) {
+      return safeErr(id, ERR.FORBIDDEN, 'read-only grant')
+    }
+
+    const ctx = contextFor(m)
+
+    // Built in, because both ends need a liveness probe that exists before any app
+    // has registered anything.
+    if (method === 'ping') {
+      return ctx.reply({ protocol: 1, libraryId, app: protocol.app })
+    }
+
+    if (method === 'media.stream') {
+      if (!openStream) return safeErr(id, ERR.NO_METHOD, 'this host serves no streams')
+      const stream = await openStream(ctx.params, ctx)
+      if (!stream) return safeErr(id, ERR.NOT_FOUND, 'no such item')
+      if (onStream) onStream(ctx.params, ctx)
+      return pipeStream(id, stream)
+    }
+
+    const handler = methods[method]
+    if (!handler) {
+      // Typed, and the channel survives. An old host must degrade in front of a
+      // newer client rather than wedge it.
+      return safeErr(id, ERR.NO_METHOD, `unknown method: ${method}`)
+    }
+
+    const body = await handler(ctx)
+    // undefined means the handler answered for itself - it replied, streamed, or
+    // deliberately said nothing. Anything else is the response body.
+    if (body !== undefined) ctx.reply(body)
+  }
+
+  return channel
+}
+
+module.exports = {
+  serveMedia,
+  ownerOf,
+  MethodError,
+  badParams,
+  notFound,
+  forbidden,
+  BASE_MUTATING
+}

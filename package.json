@@ -9,6 +9,8 @@
     "./constants": "./src/protocol/constants.js",
     "./framing": "./src/protocol/framing.js",
     "./relay": "./src/protocol/relay.js",
+    "./server": "./src/server.js",
+    "./media": "./src/media.js",
     "./gate": "./src/gate.js",
     "./grants": "./src/grants.js",
     "./identity": "./src/identity.js",
@@ -31,6 +33,7 @@
     "hyperdht": "^6.20.3",
     "protomux": "^3.10.1",
     "sodium-universal": "^5.0.1",
+    "streamx": "^2.28.0",
     "z32": "^1.1.0"
   },
   "peerDependencies": {

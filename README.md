@@ -24,6 +24,8 @@ unchanged?**
 | Module | What it is |
 | --- | --- |
 | `createProtocol` | Brands the whole wire for one app: topics, link scheme, id namespaces, relay key. |
+| `LibraryHost` | The daemon. One HyperDHT server, the firewall, discovery-topic announce, the expiry sweep, and every operator action that has to cut somebody off. |
+| `serveMedia` | The media CHANNEL - registration order, backpressure, chunking, the scope chokepoint, `media.stream`. The app hands in a method table. |
 | `gate` | `decide()` says who may OPEN a connection. `Connections` says who may KEEP one. |
 | `grants` | The host-local, never-replicated allow-list: people, per-person grants, revoke. |
 | `identity` | The 32-byte host seed and the keypair derived from it. |
@@ -35,6 +37,41 @@ unchanged?**
 A method table does **not** pass the test. The method table IS the app: audio
 methods are not video methods. Adapters, browse, cast drivers and source probes
 stay app-local for the same reason.
+
+## Standing up a host
+
+```js
+const { createProtocol, LibraryHost } = require('@peerloom/host')
+
+const protocol = createProtocol({ app: 'pearcinema', displayName: 'PearCinema' })
+
+const host = new LibraryHost({
+  protocol,
+  dataDir: './host-data',
+  libraryName: 'The Cinema',
+  media: (host) => ({
+    methods: {
+      'library.list': async (ctx) => adapter.list(ctx.params),
+      'resume.set': async (ctx) => state.setResume(ctx.owner, ctx.params)
+    },
+    mutating: ['resume.set'],
+    openStream: async (params) => adapter.stream(params)
+  }),
+  // A cast target is NOT a HyperDHT connection, so connections.kill() cannot reach
+  // it. Revoke calls this to actively stop the device.
+  silence: async (deviceKey) => casts.stopFor(deviceKey)
+})
+
+await host.ready()
+console.log(host.startPairing())   // the pairing link, for the QR
+```
+
+Handlers get a `ctx` carrying only **authenticated** facts - `ctx.grant`,
+`ctx.scope`, `ctx.owner`, `ctx.deviceKey` all come from the Noise-proven remote
+key, never from params. Returning a value sends it as the response body; returning
+undefined means the handler answered for itself. Throwing `ctx.notFound()`,
+`ctx.forbidden()` or `ctx.badParams()` sends that typed code, and anything else
+becomes `EINTERNAL` with its message swallowed.
 
 ## Branding the wire
 
@@ -98,18 +135,28 @@ worklet on a phone. No iOS, no trap.
 
 ## Status
 
-Phase 1 of the extraction. In the package and tested:
+Phases 1 and 2 done. The package can stand up a working host: pair a device, serve
+it methods and bytes, revoke it, and watch the socket die. That is proven end to
+end in `test/server.test.js` over a real DHT testnet - real Noise, real Protomux,
+real Hyperbee, nothing faked below the method table.
+
+In the package and tested:
 
 - `createProtocol` and the whole `protocol/` layer
 - `gate`, `grants`, `identity`, `presence`, `pair`, `logprune`
+- `serveMedia` - the channel seam
+- `LibraryHost` - the daemon
 
 Still in PearTune, to follow:
 
-- `server.js` - the HyperDHT server, firewall wiring and connection lifecycle
-- the `serveMedia` seam - channel and backpressure shared, method table injected
-- `update-check`, `update-apply`
-- the Preact dashboard, which may or may not belong here at all (open question 3
-  in the proposal)
+- `state.js` - the host-as-hub user store (favorites, resume, counts, playlists).
+  Genuinely shared behaviour wrapped around an app-specific kind vocabulary, so it
+  needs the same treatment `ids` got rather than a straight move.
+- `avatars.js` - device photos. Small, and it moves with `state`.
+- `update-check`, `update-apply` - operator daemon plumbing, mechanical.
+- The Preact dashboard, which may or may not belong here at all (open question 3
+  in the proposal). Its two XSS/build-artifact tests deliberately stayed in
+  PearTune with it.
 
 **PearTune has not migrated yet, by design.** Option C in the proposal: the
 package is proven by a real second consumer before the shipped app moves onto it,

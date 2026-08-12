@@ -20,6 +20,8 @@ const grants = require('./grants')
 const identity = require('./identity')
 const presence = require('./presence')
 const pair = require('./pair')
+const media = require('./media')
+const server = require('./server')
 const logprune = require('./logprune')
 
 module.exports = {
@@ -48,6 +50,19 @@ module.exports = {
 
   PairSession: pair.PairSession,
   tokenEquals: pair.tokenEquals,
+
+  // The channel, not the methods. The app hands in a method table; the package
+  // keeps the scope chokepoint, backpressure, chunking and the typed-error
+  // contract - and owns media.stream, because gating a byte stream on a live grant
+  // must not be reimplemented per app.
+  serveMedia: media.serveMedia,
+  ownerOf: media.ownerOf,
+  MethodError: media.MethodError,
+
+  // The whole daemon: one HyperDHT server, the firewall, the discovery-topic
+  // announce, the expiry sweep and every operator action that has to cut somebody
+  // off.
+  LibraryHost: server.LibraryHost,
 
   pruneRocksLogs: logprune.pruneRocksLogs,
 
