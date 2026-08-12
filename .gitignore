@@ -1,0 +1,12 @@
+node_modules/
+
+# Host identity. This seed IS the library's address: anyone holding it can
+# impersonate the host and harvest devices that try to pair.
+*.seed
+host-data/
+
+TODO.md
+DONE.md
+
+*.log
+.DS_Store
