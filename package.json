@@ -1,0 +1,47 @@
+{
+  "name": "@peerloom/host",
+  "version": "0.1.0",
+  "description": "Shared library-host substrate for PeerLoom apps: brandable wire protocol, auth gate, host-local grant store, pairing and presence. Extracted from PearTune.",
+  "main": "src/index.js",
+  "exports": {
+    ".": "./src/index.js",
+    "./protocol": "./src/protocol/index.js",
+    "./constants": "./src/protocol/constants.js",
+    "./framing": "./src/protocol/framing.js",
+    "./relay": "./src/protocol/relay.js",
+    "./gate": "./src/gate.js",
+    "./grants": "./src/grants.js",
+    "./identity": "./src/identity.js",
+    "./presence": "./src/presence.js",
+    "./pair": "./src/pair.js",
+    "./logprune": "./src/logprune.js"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.js",
+    "verify": "node --test test/*.test.js"
+  },
+  "license": "MIT",
+  "comment:no-overrides": "This package runs in NODE ON A SERVER, not in a Bare worklet on a phone, so @peerloom/core's native-addon `overrides` block does NOT apply and must not be copied here. That block exists because iOS links native addons by exact framework version and any drift is ADDON_NOT_FOUND at launch. No iOS, no trap. Stated explicitly so nobody cargo-cults it in, and so nobody assumes it is safe when a future phone-side extraction happens.",
+  "devDependencies": {
+    "b4a": "^1.6.7",
+    "compact-encoding": "^2.16.0",
+    "corestore": "^7.4.4",
+    "hyperbee": "^2.24.2",
+    "hypercore-crypto": "^3.6.1",
+    "hyperdht": "^6.20.3",
+    "protomux": "^3.10.1",
+    "sodium-universal": "^5.0.1",
+    "z32": "^1.1.0"
+  },
+  "peerDependencies": {
+    "b4a": "^1.6.7",
+    "compact-encoding": "^2.16.0",
+    "corestore": "^7.4.4",
+    "hyperbee": "^2.24.2",
+    "hypercore-crypto": "^3.6.1",
+    "hyperdht": "^6.20.3",
+    "protomux": "^3.10.1",
+    "sodium-universal": "^5.0.1",
+    "z32": "^1.1.0"
+  }
+}
