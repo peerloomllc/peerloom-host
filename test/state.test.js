@@ -196,3 +196,25 @@ test('DELETING A PERSON TAKES WHAT THEY WATCHED WITH THEM', async (t) => {
   assert.deepEqual(await s.listResume('p:tim'), [])
   assert.deepEqual((await s.listFavs('p:tim')).movie, [])
 })
+
+test('WHAT THEY FINISHED MOST RECENTLY, which a Set cannot answer', async (t) => {
+  // The question a next-episode shelf is built from: which show did they just finish
+  // an episode of. Walking every series in a library to work that out is free on a
+  // folder source and one HTTP call per show on a server one.
+  const s = await store(t, VIDEO)
+  await s.setWatched('p:tim', 'first', true)
+  await new Promise(r => setTimeout(r, 5))
+  await s.setWatched('p:tim', 'second', true)
+  await new Promise(r => setTimeout(r, 5))
+  await s.setWatched('p:tim', 'third', true)
+
+  assert.deepEqual((await s.recentWatched('p:tim')).map(r => r.itemId), ['third', 'second', 'first'])
+  assert.deepEqual((await s.recentWatched('p:tim', 1)).map(r => r.itemId), ['third'])
+})
+
+test('something marked UNwatched is not recent, it is absent', async (t) => {
+  const s = await store(t, VIDEO)
+  await s.setWatched('p:tim', 'a', true)
+  await s.setWatched('p:tim', 'a', false)
+  assert.deepEqual(await s.recentWatched('p:tim'), [])
+})

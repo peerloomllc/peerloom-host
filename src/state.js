@@ -246,6 +246,25 @@ class UserState {
     return out
   }
 
+  // What this owner finished most recently, newest first.
+  //
+  // The companion to `watchedSet`, and it exists for a question a Set cannot answer:
+  // "which show did they just finish an episode of". That is what a next-episode
+  // shelf is built from, and walking every series in a library to find out would be
+  // free on a folder source and one HTTP call per show on a server one.
+  //
+  // Rows rather than ids, because the caller wants the timestamp it sorted by.
+  async recentWatched (ownerId, limit = 20) {
+    const lo = `watched:${ownerId}:`
+    const hi = `watched:${ownerId};`
+    const rows = []
+    for await (const node of this.bee.createReadStream({ gte: lo, lt: hi }, { valueEncoding: 'json' })) {
+      if (node.value?.on) rows.push(node.value)
+    }
+    rows.sort((a, b) => (b.at || 0) - (a.at || 0))
+    return rows.slice(0, Math.max(1, Number(limit) || 20))
+  }
+
   // --- play counts (milestone 3, phase 3) -----------------------------------
   //
   // count:{ownerId}:{trackId} -> { trackId, count, updatedAt }. Host-as-hub, so the
