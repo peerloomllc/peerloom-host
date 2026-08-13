@@ -41,6 +41,7 @@ const z32 = require('z32')
 
 const { createIdentity } = require('./identity')
 const { Grants } = require('./grants')
+const { UserState } = require('./state')
 const { decide, sweepKills, Connections } = require('./gate')
 const { Presence, notifyOwners } = require('./presence')
 const { PairSession } = require('./pair')
@@ -91,6 +92,11 @@ class LibraryHost {
     // object, because a method table needs the host it is serving and the host does
     // not exist until the constructor finishes.
     media = null,
+
+    // { kinds, idField } for the per-person state store. Omitted means the music
+    // vocabulary, which is what the donor built and what keeps its rows unchanged
+    // through the migration. See state.js.
+    state = {},
 
     // Extra device keys to sweep for expiry alongside the live connections. A phone
     // can start a cast and close the app: the connection goes, the TV keeps playing,
@@ -147,6 +153,20 @@ class LibraryHost {
     })
     this.grants = new Grants(this.bee)
 
+    // Per-person state - what somebody watched, where they stopped, what they
+    // starred. A SEPARATE Hyperbee from grants, deliberately and inherited as such:
+    // grants are a single-purpose, never-replicated SECURITY surface and must not
+    // share a store with ambient user state, or the rules that protect one start
+    // getting applied to the other by accident. Both live in the one corestore.
+    //
+    // The vocabulary is the app's - music says track/album/artist, video says
+    // movie/episode/series - so it is passed in rather than baked. See state.js.
+    this.stateBee = new Hyperbee(this.store.get({ name: 'state' }), {
+      keyEncoding: 'utf-8',
+      valueEncoding: 'json'
+    })
+    this.userState = new UserState(this.stateBee, state)
+
     this.connections = new Connections()
 
     // The registry that lets a request on one device's connection push to another
@@ -185,6 +205,7 @@ class LibraryHost {
 
   async ready () {
     await this.bee.ready()
+    await this.stateBee.ready()
 
     this.server = this.dht.createServer({
       firewall: (remotePublicKey) => this._firewall(remotePublicKey)
@@ -559,6 +580,7 @@ class LibraryHost {
 
     if (this.server) await this.server.close().catch(() => {})
     await this.bee.close().catch(() => {})
+    await this.stateBee.close().catch(() => {})
     await this.store.close().catch(() => {})
     // Only destroy a DHT we made. A caller that handed one in (a testnet, a shared
     // node) still owns it.
