@@ -22,6 +22,7 @@ const presence = require('./presence')
 const pair = require('./pair')
 const media = require('./media')
 const server = require('./server')
+const state = require('./state')
 const logprune = require('./logprune')
 const dashboardAuth = require('./dashboard-auth')
 
@@ -45,6 +46,14 @@ module.exports = {
   createIdentity: identity.createIdentity,
   loadOrCreateSeed: identity.loadOrCreateSeed,
   SEED_FILE: identity.SEED_FILE,
+
+  // Per-person state: what somebody has watched, where they stopped, what they
+  // favourited. The kind vocabulary and the row's id field are passed in, because
+  // music says track/album/artist and video says movie/episode/series - see state.js.
+  UserState: state.UserState,
+  FAV_KINDS: state.FAV_KINDS,
+  REQUEST_KINDS: state.REQUEST_KINDS,
+  REQUEST_STATUSES: state.REQUEST_STATUSES,
 
   Presence: presence.Presence,
   notifyOwners: presence.notifyOwners,
