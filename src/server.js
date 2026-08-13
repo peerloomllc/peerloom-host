@@ -165,6 +165,7 @@ class LibraryHost {
     this._sweep = null
     this._logPrune = null
     this._closed = false
+    this._closing = null
 
     this._media = media
     this._extraLiveKeys = extraLiveKeys
@@ -537,7 +538,18 @@ class LibraryHost {
     }))
   }
 
-  async close () {
+  // Idempotent, and that is not tidiness. A daemon gets SIGINT and SIGTERM in quick
+  // succession often enough, and a second close that re-entered the teardown would
+  // call bee.close() on a store already closing - which resolves fine, or hangs,
+  // depending on timing. Return the FIRST close's promise so a second caller waits
+  // for the same shutdown instead of starting a rival one.
+  close () {
+    if (this._closing) return this._closing
+    this._closing = this._close()
+    return this._closing
+  }
+
+  async _close () {
     this._closed = true
     if (this.pairSession) this.pairSession.close('shutdown')
     if (this._reannounce) clearInterval(this._reannounce)
