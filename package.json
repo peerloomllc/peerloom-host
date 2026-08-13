@@ -16,7 +16,8 @@
     "./identity": "./src/identity.js",
     "./presence": "./src/presence.js",
     "./pair": "./src/pair.js",
-    "./logprune": "./src/logprune.js"
+    "./logprune": "./src/logprune.js",
+    "./dashboard-auth": "./src/dashboard-auth.js"
   },
   "scripts": {
     "test": "node --test test/*.test.js",

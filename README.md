@@ -31,6 +31,7 @@ unchanged?**
 | `identity` | The 32-byte host seed and the keypair derived from it. |
 | `pair` | The `<app>/pair/1` window, QR and link pairing, one-shot tokens. |
 | `presence` | Live push senders per device, so the host can speak first. |
+| `dashboard-auth` | The LOCK on the control plane: password gate, sessions, rate limiting, fail-closed bind check. Per-app session cookie. |
 | `logprune` | Operator daemon plumbing. |
 | `framing` | compact-encoding message shapes. |
 
@@ -154,9 +155,10 @@ Still in PearTune, to follow:
   needs the same treatment `ids` got rather than a straight move.
 - `avatars.js` - device photos. Small, and it moves with `state`.
 - `update-check`, `update-apply` - operator daemon plumbing, mechanical.
-- The Preact dashboard, which may or may not belong here at all (open question 3
-  in the proposal). Its two XSS/build-artifact tests deliberately stayed in
-  PearTune with it.
+- The dashboard PAGE. Open question 3 in the proposal is now answered by splitting
+  it rather than choosing a side: the LOCK is shared machinery and security-critical,
+  so it lives here and is tested once; the PAGE is per-app copy and branding, so it
+  stays with the app. PearTune keeps its own login-page and XSS tests alongside it.
 
 **PearTune has not migrated yet, by design.** Option C in the proposal: the
 package is proven by a real second consumer before the shipped app moves onto it,
