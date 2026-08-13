@@ -23,6 +23,7 @@ const pair = require('./pair')
 const media = require('./media')
 const server = require('./server')
 const logprune = require('./logprune')
+const dashboardAuth = require('./dashboard-auth')
 
 module.exports = {
   // The one call that brands the wire for an app.
@@ -63,6 +64,14 @@ module.exports = {
   // announce, the expiry sweep and every operator action that has to cut somebody
   // off.
   LibraryHost: server.LibraryHost,
+
+  // The LOCK on the control plane. The PAGE it guards stays with the app whose
+  // branding it carries - that is open question 3 in the shared-host proposal
+  // answered by splitting it rather than choosing a side.
+  createDashboardAuth: dashboardAuth.createDashboardAuth,
+  requireSafeBind: dashboardAuth.requireSafeBind,
+  resolveDashboardPassword: dashboardAuth.resolveDashboardPassword,
+  generatePassword: dashboardAuth.generatePassword,
 
   pruneRocksLogs: logprune.pruneRocksLogs,
 
