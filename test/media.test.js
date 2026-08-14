@@ -94,7 +94,9 @@ function harness (t, opts = {}) {
     })
   }
 
-  return { call, channel, grant, libraryId, pushes, hostConn }
+  // `raw` exposes the client-side messages (req, cancel) and the chunk piles for
+  // the cancel tests, which need to speak below the request/response sugar.
+  return { call, channel, grant, libraryId, pushes, hostConn, raw: built, chunksFor: (id) => chunks.get(id) || [], pending }
 }
 
 test('ping is built in, so a probe works before an app registers anything', async (t) => {
@@ -341,4 +343,103 @@ test('serveMedia refuses to run without a protocol or a grant', () => {
   assert.throws(() => serveMedia({ conn, libraryId: 'x', grant: fakeGrant() }), /needs a protocol/)
   assert.throws(() => serveMedia({ protocol, conn, libraryId: 'x' }), /needs the grant/)
   conn.destroy()
+})
+
+// --- stream cancel (proposals/2026-08-14-stream-cancel.md) -------------------
+//
+// The client's one way to say "stop answering" without destroying the whole
+// connection. The guarantees pinned here: the source is destroyed (which is
+// what frees the file handle or EPIPEs a transcode's ffmpeg), nothing further
+// is sent for the id - not even an end frame - the channel survives, and both
+// race orders are legal.
+
+const { Readable } = require('streamx')
+
+// A source that never ends on its own - the shape of a 2 GB film behind an
+// abandoned probe. Paced by setImmediate so an endless producer over a fake
+// zero-backpressure duplex cannot monopolize the event loop.
+function endlessSource () {
+  return new Readable({
+    read (cb) {
+      setImmediate(() => {
+        if (!this.destroyed) this.push(b4a.alloc(4096, 7))
+        cb(null)
+      })
+    }
+  })
+}
+
+test('CANCEL STOPS THE PIPE: source destroyed, no end frame, channel survives', async (t) => {
+  let source = null
+  const h = harness(t, {
+    openStream: async () => { source = endlessSource(); return source }
+  })
+
+  // Ask for the stream below the sugar, so the pending map does not time out on
+  // a response that is deliberately never coming.
+  const id = 999
+  h.raw.messages.req.send({ id, method: 'media.stream', params: { trackId: 'x' } })
+
+  // Let some bytes flow, then hang up.
+  await new Promise((r) => setTimeout(r, 50))
+  assert.ok(h.chunksFor(id).length > 0, 'bytes were flowing before the cancel')
+  h.raw.messages.cancel.send({ id })
+
+  // The source dies - that is the whole point: the host stops READING, not just
+  // sending, so the file handle or the ffmpeg behind it is freed.
+  await new Promise((r) => setTimeout(r, 100))
+  assert.ok(source.destroyed, 'the host destroyed the source')
+
+  // Nothing further arrives for the id, and the count settles.
+  const at = h.chunksFor(id).length
+  await new Promise((r) => setTimeout(r, 100))
+  assert.equal(h.chunksFor(id).length, at, 'no chunks after the cancel settled')
+
+  // The channel is alive and well.
+  const res = await h.call('ping')
+  assert.equal(res.kind, 'res')
+})
+
+test('a cancel that races the open kills the stream at birth', async (t) => {
+  let source = null
+  const h = harness(t, {
+    openStream: async () => {
+      // The window the pre-cancel set exists for: the cancel lands while the
+      // host is still opening - for a segment, still spawning ffmpeg.
+      await new Promise((r) => setTimeout(r, 60))
+      source = endlessSource()
+      return source
+    }
+  })
+
+  const id = 1000
+  h.raw.messages.req.send({ id, method: 'media.stream', params: { trackId: 'x' } })
+  await new Promise((r) => setTimeout(r, 10))
+  h.raw.messages.cancel.send({ id })
+
+  await new Promise((r) => setTimeout(r, 150))
+  assert.ok(source, 'the stream did open')
+  assert.ok(source.destroyed, 'and died at birth')
+  assert.equal(h.chunksFor(id).length, 0, 'not one chunk was sent')
+
+  const res = await h.call('ping')
+  assert.equal(res.kind, 'res')
+})
+
+test('a cancel for an unknown id is harmless in both orders', async (t) => {
+  const h = harness(t, {
+    openStream: async () => Readable.from([b4a.from('abc')])
+  })
+
+  // Cancel for an id that never existed.
+  h.raw.messages.cancel.send({ id: 424242 })
+
+  // Cancel AFTER a stream finished naturally - the client raced the end frame.
+  const done = await h.call('media.stream', { trackId: 'x' })
+  assert.equal(done.kind, 'end')
+  assert.equal(b4a.toString(done.data), 'abc')
+  h.raw.messages.cancel.send({ id: done.id ?? 1 })
+
+  const res = await h.call('ping')
+  assert.equal(res.kind, 'res')
 })

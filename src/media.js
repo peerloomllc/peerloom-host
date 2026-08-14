@@ -99,6 +99,17 @@ function serveMedia ({
   // sender from the presence registry, so a dead channel is never pushed to.
   let unregisterPresence = () => {}
 
+  // The streamed responses currently in flight, request id -> { source, cancelled }.
+  // This is what a cancel frame reaches for: destroy the source, flag the pipe.
+  const liveStreams = new Map()
+
+  // Cancels that arrived BEFORE their stream started piping. The window is real:
+  // an abandoned probe cancels milliseconds after requesting, and the request may
+  // still be inside openStream - for a transcoded segment that is an ffmpeg spawn.
+  // Bounded, because a peer could send cancels for ids that will never exist.
+  const preCancelled = new Set()
+  const PRE_CANCELLED_MAX = 128
+
   // Registration order is fixed in protocol/channels.js and MUST match the client's.
   // Do not hand-roll addMessage here - see the note in that file.
   const built = protocol.channels.mediaChannel(mux, {
@@ -112,6 +123,28 @@ function serveMedia ({
         log('media:dispatch-failed', { method: m?.method, err: e?.message })
         safeErr(m?.id ?? 0, ERR.INTERNAL, 'internal error')
       }
+    },
+    // The client no longer wants this response - an abandoned probe, a closed
+    // player, a scrub past a transcoding segment. Destroying the source is what
+    // frees the real work behind it: a file read closes, and a transcode's pipe
+    // teardown EPIPEs its ffmpeg, which exits and frees the pool slot. An id we
+    // no longer hold (already finished, never streamed) is silently fine - the
+    // race against a natural end is legal in both orders by design.
+    oncancel: (m) => {
+      const live = liveStreams.get(m.id)
+      if (!live) {
+        // Not piping yet - remember the id so a stream still opening dies at
+        // birth instead of streaming to a client that already hung up.
+        preCancelled.add(m.id)
+        if (preCancelled.size > PRE_CANCELLED_MAX) {
+          const oldest = preCancelled.values().next().value
+          preCancelled.delete(oldest)
+        }
+        return
+      }
+      live.cancelled = true
+      try { live.source.destroy?.() } catch {}
+      log('media:cancelled', { id: m.id })
     }
   })
 
@@ -148,13 +181,24 @@ function serveMedia ({
   }
 
   async function pipeStream (id, stream) {
+    // The cancel already arrived while the stream was opening. Kill it at birth.
+    if (preCancelled.delete(id)) {
+      try { stream.destroy?.() } catch {}
+      log('media:cancelled', { id, at: 'open' })
+      return
+    }
     let seq = 0
     let total = 0
+    const live = { source: stream, cancelled: false }
+    liveStreams.set(id, live)
     try {
       for await (const buf of stream) {
         // Frames are capped so a seek is never stuck behind one fat in-flight
         // chunk, regardless of what the source hands us.
         for (let off = 0; off < buf.length; off += CHUNK_SIZE) {
+          // Cancelled by the client - it has already forgotten this id, so send
+          // nothing further, not even an end frame.
+          if (live.cancelled) return
           const slice = buf.subarray(off, Math.min(off + CHUNK_SIZE, buf.length))
           const ok = send.chunk.send({ id, seq: seq++, data: slice })
           total += slice.length
@@ -163,13 +207,18 @@ function serveMedia ({
           // reading the file, do not send an end frame, and let the socket's own
           // teardown finish the job. This is the loop that must not keep pushing
           // bytes at a device that was just cut off.
-          if (channel.closed) return
+          if (channel.closed || live.cancelled) return
         }
       }
-      send.end.send({ id, total })
+      if (!live.cancelled) send.end.send({ id, total })
     } catch (e) {
+      // Destroying the source mid-iteration throws (premature close) - for a
+      // cancelled stream that is the expected teardown, not a failure.
+      if (live.cancelled) return
       log('media:stream-failed', { id, err: e?.message })
       safeErr(id, ERR.INTERNAL, 'stream failed')
+    } finally {
+      liveStreams.delete(id)
     }
   }
 
