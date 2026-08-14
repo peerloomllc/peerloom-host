@@ -41,10 +41,13 @@ function createChannels ({ pairProtocol, mediaProtocol }) {
     return { channel, messages }
   }
 
-  // Message order for <app>/media/1: req(0), res(1), chunk(2), end(3), err(4), push(5).
-  // `push` is the host's one unsolicited server->client event (session handoff). It is LAST
-  // so every existing type id is unchanged - an old peer that never registers it just drops
-  // the frame (Protomux ignores an unknown type), which is exactly the backward-compat this
+  // Message order for <app>/media/1: req(0), res(1), chunk(2), end(3), err(4), push(5),
+  // cancel(6).
+  // `push` is the host's one unsolicited server->client event (session handoff).
+  // `cancel` is the client's "stop answering this request" (stream-cancel proposal,
+  // 2026-08-14). Each was appended LAST IN ITS DAY so every existing type id is
+  // unchanged - an old peer that never registers a type just drops the frame
+  // (Protomux ignores an unknown type), which is exactly the backward-compat this
   // file exists to guarantee.
   function mediaChannel (mux, {
     id,
@@ -54,6 +57,7 @@ function createChannels ({ pairProtocol, mediaProtocol }) {
     onend = null,
     onerr = null,
     onpush = null,
+    oncancel = null,
     onopen = null,
     onclose = null
   } = {}) {
@@ -71,7 +75,8 @@ function createChannels ({ pairProtocol, mediaProtocol }) {
       chunk: channel.addMessage({ encoding: framing.chunk, onmessage: onchunk || undefined }),
       end: channel.addMessage({ encoding: framing.end, onmessage: onend || undefined }),
       err: channel.addMessage({ encoding: framing.err, onmessage: onerr || undefined }),
-      push: channel.addMessage({ encoding: framing.push, onmessage: onpush || undefined })
+      push: channel.addMessage({ encoding: framing.push, onmessage: onpush || undefined }),
+      cancel: channel.addMessage({ encoding: framing.cancel, onmessage: oncancel || undefined })
     }
 
     return { channel, messages }
