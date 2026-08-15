@@ -157,6 +157,26 @@ class Grants {
     return row
   }
 
+  // A device claiming its own identity: "I am Sam, and this phone is 'kitchen
+  // tablet'". The claim GRANTS NOTHING - personId is untouched, so what the
+  // device may reach is exactly what it was; only the operator's confirm flow
+  // (which already reads claimedUser) can move a device to a person. The label
+  // is the device's own name for itself and is safe to take at its word.
+  // Host-only writer, like every other grant mutation; both fields optional so
+  // a device can rename itself without re-claiming.
+  async setClaim (deviceKey, { claimedUser = undefined, label = undefined } = {}) {
+    const key = Grants.keyOf(deviceKey)
+    const row = await this.get(key)
+    if (!row || row.revokedAt) return null
+    if (claimedUser !== undefined) {
+      row.claimedUser = String(claimedUser || '').slice(0, 64) || null
+      row.claimedAt = row.claimedUser ? Date.now() : null
+    }
+    if (label !== undefined) row.label = String(label || '').slice(0, 64) || row.label
+    await this.bee.put('grant:' + key, row, { valueEncoding: 'json' })
+    return row
+  }
+
   async get (deviceKey) {
     const node = await this.bee.get('grant:' + Grants.keyOf(deviceKey), { valueEncoding: 'json' })
     return node ? node.value : null
