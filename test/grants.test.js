@@ -505,3 +505,25 @@ test('setClaim records the claim and never grants: personId is untouched', async
   await g.revoke(kp.publicKey)
   assert.equal(await g.setClaim(kp.publicKey, { claimedUser: 'X' }), null)
 })
+
+test('re-granting a known device keeps its name, claim, person and seen history', async (t) => {
+  const g = await store(t)
+  const kp = hcrypto.keyPair()
+  await g.grant({ deviceKey: kp.publicKey, label: 'Pixel', platform: 'android' })
+  await g.setClaim(kp.publicKey, { claimedUser: 'Tim' })
+  await g.touch(kp.publicKey)
+  const before = await g.get(kp.publicKey)
+
+  // The owner promotion re-pair: a fresh grant that says nothing but scope.
+  const row = await g.grant({ deviceKey: kp.publicKey, scope: 'owner', grantedBy: 'qr-pair' })
+  assert.equal(row.scope, 'owner', 'what the new grant says wins')
+  assert.equal(row.label, 'Pixel', 'the name survives')
+  assert.equal(row.claimedUser, 'Tim', 'the claim survives')
+  assert.equal(row.lastSeenAt, before.lastSeenAt, 'seen history survives')
+
+  // A revoked device gets no inheritance - a fresh pair is a fresh start.
+  await g.revoke(kp.publicKey)
+  const fresh = await g.grant({ deviceKey: kp.publicKey, label: '' })
+  assert.equal(fresh.label, '', 'nothing carries across a revoke')
+  assert.equal(fresh.claimedUser, null)
+})

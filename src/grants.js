@@ -114,20 +114,29 @@ class Grants {
   // claim it already had, rather than reading as assigned-but-unclaimed on the dashboard.
   async grant ({ deviceKey, personId = null, label = '', platform = '', scope = SCOPE.FULL, grantedBy = 'operator', expiresAt = null, claimedUser = null, claimedAt = null }) {
     const key = Grants.keyOf(deviceKey)
+    // RE-GRANTING AN ALREADY-KNOWN DEVICE MUST NOT AMNESIA IT. An owner
+    // promotion or a guest extension is a re-pair, and the fresh row used to
+    // wipe the device's name, its claim, its person and its whole seen
+    // history - measured in the field 2026-08-15: a phone re-paired as owner
+    // came back called "phone", claiming nobody, "never seen". What the new
+    // grant SAYS wins (scope, expiry, grantedBy - that is the point of
+    // re-pairing); what it is silent about survives.
+    const prior = await this.get(key)
+    const keep = prior && !prior.revokedAt ? prior : null
     const row = {
       deviceKey: key,
-      personId,
-      label,
-      platform,
+      personId: personId ?? keep?.personId ?? null,
+      label: label || keep?.label || '',
+      platform: platform || keep?.platform || '',
       scope,
       grantedAt: Date.now(),
       grantedBy,
       expiresAt, // null = never; a timestamp = a time-limited GUEST grant (gate.decide denies past it)
       paths: null, // reserved: v2 library-subset scopes
-      claimedUser,
-      claimedAt,
+      claimedUser: claimedUser ?? keep?.claimedUser ?? null,
+      claimedAt: claimedAt ?? keep?.claimedAt ?? null,
       revokedAt: null,
-      lastSeenAt: null
+      lastSeenAt: keep?.lastSeenAt ?? null
     }
     await this.bee.put('grant:' + key, row, { valueEncoding: 'json' })
     return row
