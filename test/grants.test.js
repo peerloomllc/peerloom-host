@@ -484,3 +484,24 @@ test('personsByName lists the live holders a pending claim must choose between',
   assert.deepEqual((await g.personsByName('Sam')).map(p => p.id), [(await g.personsByName('Sam'))[0].id])
   assert.equal((await g.personsByName('Sam')).length, 1)
 })
+
+test('setClaim records the claim and never grants: personId is untouched', async (t) => {
+  const g = await store(t)
+  const kp = hcrypto.keyPair()
+  await g.grant({ deviceKey: kp.publicKey, label: 'phone' })
+
+  const row = await g.setClaim(kp.publicKey, { claimedUser: 'Sam', label: 'kitchen tablet' })
+  assert.equal(row.claimedUser, 'Sam')
+  assert.equal(row.label, 'kitchen tablet')
+  assert.ok(row.claimedAt > 0)
+  assert.equal(row.personId, null, 'a claim must never assign')
+
+  // Rename without re-claiming: the claim stays as it was.
+  const renamed = await g.setClaim(kp.publicKey, { label: 'hall tablet' })
+  assert.equal(renamed.claimedUser, 'Sam')
+  assert.equal(renamed.label, 'hall tablet')
+
+  // A revoked device cannot claim.
+  await g.revoke(kp.publicKey)
+  assert.equal(await g.setClaim(kp.publicKey, { claimedUser: 'X' }), null)
+})
