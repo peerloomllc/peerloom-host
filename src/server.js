@@ -174,6 +174,11 @@ class LibraryHost {
     // revoke destroys the connection, which unregisters here.
     this.presence = new Presence()
 
+    // Live media-channel handles by z32 device key, so a grant change can be
+    // applied to connections that are ALREADY up (assignDevice). Entries prune
+    // themselves on connection close.
+    this._mediaHandles = new Map()
+
     this.server = null
     this.pairSession = null
 
@@ -383,7 +388,7 @@ class LibraryHost {
 
       const app = this._media ? this._media(this) : {}
 
-      serveMedia({
+      const handle = serveMedia({
         protocol: this.protocol,
         conn,
         libraryId: this.libraryId,
@@ -395,6 +400,19 @@ class LibraryHost {
         onStream: app.onStream || null,
         log: (msg, data) => this.log(msg, { device: short, ...data })
       })
+
+      // Remembered so assignDevice can refresh this connection's grant snapshot
+      // in place. Keyed the way the grant store keys devices, pruned on close.
+      if (handle) {
+        const dk = z32.encode(remoteKey)
+        let set = this._mediaHandles.get(dk)
+        if (!set) this._mediaHandles.set(dk, set = new Set())
+        set.add(handle)
+        conn.once('close', () => {
+          set.delete(handle)
+          if (set.size === 0) this._mediaHandles.delete(dk)
+        })
+      }
     })
   }
 
@@ -500,6 +518,26 @@ class LibraryHost {
     this.log('host:expiry-set', { device: Grants.keyOf(deviceKey).slice(0, 8), expiresAt, killed, silenced })
     this.notifyOwnersDevicesChanged()
     return { grant: row, killed, silenced }
+  }
+
+  // Assign a device to a person - and make it TRUE IMMEDIATELY, not at the
+  // device's next reconnect. A grant otherwise travels at connect time only,
+  // so a phone watching mid-assignment kept filing its positions under the old
+  // owner until somebody restarted the app (PearCinema TODO, 2026-08-14). Every
+  // live connection gets its snapshot swapped in place, and the device is told
+  // ('grant:changed') so its UI can reload shelves that now belong to somebody
+  // else. Personless assignment (null) detaches the same way.
+  async assignDevice (deviceKey, personId) {
+    const row = await this.grants.assign(deviceKey, personId)
+    if (!row) return { grant: null, refreshed: 0, notified: 0 }
+    let refreshed = 0
+    for (const h of this._mediaHandles.get(row.deviceKey) || []) {
+      if (h.setGrant(row)) refreshed++
+    }
+    const notified = this.presence.notify(row.deviceKey, 'grant:changed', { personId: row.personId || null })
+    this.log('host:assigned', { device: row.deviceKey.slice(0, 8), personId: row.personId || null, refreshed, notified })
+    this.notifyOwnersDevicesChanged()
+    return { grant: row, refreshed, notified }
   }
 
   async revokePerson (personId) {

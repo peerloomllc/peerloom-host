@@ -155,16 +155,19 @@ function serveMedia ({
 
   channel.open()
 
-  const owner = ownerOf(grant)
+  // `let`, both of them: a grant is a row in a store the operator can change
+  // while this connection is live, and setGrant below swaps the snapshot. In-
+  // flight requests keep the context they started with; every request after
+  // the swap reads the new one (contextFor runs per message).
+  let liveGrant = grant
+  let owner = ownerOf(liveGrant)
+
+  const pushToDevice = (evt) => { try { send.push.send(evt) } catch {} }
 
   // This connection is now reachable by an unsolicited push. Keyed by the grant's device -
   // the one the firewall authenticated - so a session claim on ANOTHER connection can reach it.
   if (presence) {
-    unregisterPresence = presence.register(
-      grant.deviceKey,
-      (evt) => { try { send.push.send(evt) } catch {} },
-      owner
-    )
+    unregisterPresence = presence.register(liveGrant.deviceKey, pushToDevice, owner)
   }
 
   function safeErr (id, code, message) {
@@ -234,11 +237,11 @@ function serveMedia ({
 
       // The authenticated facts about this connection. Read these; never read an
       // identity out of params.
-      grant,
-      scope: grant.scope,
+      grant: liveGrant,
+      scope: liveGrant.scope,
       owner,
-      deviceKey: grant.deviceKey,
-      isOwner: grant.scope === SCOPE.OWNER,
+      deviceKey: liveGrant.deviceKey,
+      isOwner: liveGrant.scope === SCOPE.OWNER,
 
       reply (body) { send.res.send({ id, body }) },
       fail (code, message) { safeErr(id, code, message) },
@@ -246,7 +249,7 @@ function serveMedia ({
 
       // Push to THIS device's other live connections.
       push (kind, data = null) {
-        return presence ? presence.notify(grant.deviceKey, kind, data) : 0
+        return presence ? presence.notify(liveGrant.deviceKey, kind, data) : 0
       },
 
       // Push to this PERSON across all their devices. `exceptSelf` skips the device
@@ -255,7 +258,7 @@ function serveMedia ({
       pushToOwner (kind, data = null, { exceptSelf = true } = {}) {
         if (!presence) return 0
         return presence.notifyOwner(owner, kind, data,
-          { exceptDevice: exceptSelf ? grant.deviceKey : null })
+          { exceptDevice: exceptSelf ? liveGrant.deviceKey : null })
       },
 
       presence,
@@ -304,7 +307,31 @@ function serveMedia ({
     if (body !== undefined) ctx.reply(body)
   }
 
-  return channel
+  return {
+    channel,
+
+    // A GRANT TRAVELS AT CONNECT TIME - unless the server calls this. The
+    // operator assigning a device to a person used to apply on the device's
+    // NEXT reconnect only, so a phone watching mid-assignment kept filing its
+    // positions under the old owner. The server calls this on every live
+    // connection of the device it just reassigned; the presence registration
+    // moves to the new owner in the same breath, so person-wide pushes reach
+    // the right shelves immediately too.
+    //
+    // The device key never changes here by construction - it is the Noise-
+    // authenticated remote key, and a row for a DIFFERENT device is refused
+    // rather than half-applied.
+    setGrant (row) {
+      if (!row || row.deviceKey !== liveGrant.deviceKey) return false
+      liveGrant = row
+      owner = ownerOf(liveGrant)
+      if (presence) {
+        unregisterPresence()
+        unregisterPresence = presence.register(liveGrant.deviceKey, pushToDevice, owner)
+      }
+      return true
+    }
+  }
 }
 
 module.exports = {

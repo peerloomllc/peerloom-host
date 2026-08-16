@@ -48,13 +48,14 @@ function harness (t, opts = {}) {
   const libraryId = protocol.ids.libraryId(hcrypto.keyPair().publicKey)
   const grant = opts.grant || fakeGrant()
 
-  const channel = serveMedia({
+  const served = serveMedia({
     protocol,
     conn: hostConn,
     libraryId,
     grant,
     ...opts
   })
+  const channel = served?.channel || null
 
   // The client half, registered through the same factory so the message order
   // cannot drift.
@@ -96,7 +97,7 @@ function harness (t, opts = {}) {
 
   // `raw` exposes the client-side messages (req, cancel) and the chunk piles for
   // the cancel tests, which need to speak below the request/response sugar.
-  return { call, channel, grant, libraryId, pushes, hostConn, raw: built, chunksFor: (id) => chunks.get(id) || [], pending }
+  return { call, channel, served, grant, libraryId, pushes, hostConn, raw: built, chunksFor: (id) => chunks.get(id) || [], pending }
 }
 
 test('ping is built in, so a probe works before an app registers anything', async (t) => {
