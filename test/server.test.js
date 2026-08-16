@@ -83,7 +83,7 @@ function device (testnet) {
   }
 }
 
-function openMedia (conn, libraryId) {
+function openMedia (conn, libraryId, extra = {}) {
   const mux = Protomux.from(conn)
   const pending = new Map()
   let nextId = 1
@@ -91,7 +91,8 @@ function openMedia (conn, libraryId) {
     id: b4a.from(libraryId),
     onres: (m) => pending.get(m.id)?.({ kind: 'res', body: m.body }),
     onerr: (m) => pending.get(m.id)?.({ kind: 'err', code: m.code, message: m.message }),
-    onend: (m) => pending.get(m.id)?.({ kind: 'end', total: m.total })
+    onend: (m) => pending.get(m.id)?.({ kind: 'end', total: m.total }),
+    ...extra
   })
   built.channel.open()
   return {
@@ -406,6 +407,65 @@ test('listDevices reports who is online and who each device belongs to', async (
   assert.equal(row.online, true)
   assert.equal(row.belongsTo, 'Tim')
   conn.destroy()
+})
+
+test('ASSIGNMENT REACHES A LIVE CONNECTION - the owner changes under an open channel', async (t) => {
+  // The gap this pins: a grant used to travel at connect time only, so a phone
+  // watching mid-assignment kept filing positions under the old owner until it
+  // reconnected. assignDevice must swap the snapshot in place, move the
+  // presence registration to the new owner and tell the device.
+  const { h, testnet } = await host(t, {
+    media: () => ({
+      methods: {
+        whoami: async (ctx) => ({ owner: ctx.owner, personId: ctx.grant.personId || null })
+      }
+    })
+  })
+  const dev = device(testnet)
+  t.after(() => dev.destroy())
+
+  const link = h.startPairing()
+  const pairConn = dev.connect(h.publicKey)
+  await pairDevice(pairConn, h.libraryId, link, dev)
+  pairConn.destroy()
+  await settle(200)
+
+  const pushes = []
+  const conn = dev.connect(h.publicKey)
+  const media = openMedia(conn, h.libraryId, { onpush: (m) => pushes.push(m) })
+  t.after(() => conn.destroy())
+  await settle(500)
+
+  // Unassigned: its own owner, keyed by its device.
+  const dk = z32.encode(dev.publicKey)
+  const before = await media.call('whoami')
+  assert.equal(before.body.owner, 'd:' + dk)
+
+  // Assign WHILE CONNECTED. The same channel now answers as the person.
+  const ada = await h.grants.addPerson('Ada')
+  const out = await h.assignDevice(dev.publicKey, ada.id)
+  assert.equal(out.refreshed, 1, 'the live connection was refreshed in place')
+  assert.equal(out.notified, 1, 'the device was told')
+
+  const after = await media.call('whoami')
+  assert.equal(after.body.owner, 'p:' + ada.id)
+  assert.equal(after.body.personId, ada.id)
+
+  // The nudge arrived over the wire, typed.
+  await settle(200)
+  const nudge = pushes.find((p) => p.kind === 'grant:changed')
+  assert.ok(nudge, 'grant:changed reached the device')
+  assert.equal(nudge.data.personId, ada.id)
+
+  // Presence moved with the assignment: a push to the PERSON now reaches this
+  // device, and a push to the old owner key reaches nobody.
+  assert.equal(h.presence.notifyOwner('p:' + ada.id, 'ping'), 1)
+  assert.equal(h.presence.notifyOwner('d:' + dk, 'ping'), 0)
+
+  // Detaching applies live the same way, back to its own owner.
+  await h.assignDevice(dev.publicKey, null)
+  const detached = await media.call('whoami')
+  assert.equal(detached.body.owner, 'd:' + dk)
 })
 
 test('the host refuses to be built without a protocol or a dataDir', () => {
