@@ -165,6 +165,21 @@ function createDashboardAuth ({ app, password, envVar = null } = {}) {
     // value to disk is the caller's job (server.js /api/password).
     setPassword (next) {
       secret = crypto.createHash('sha256').update(String(next)).digest()
+    },
+
+    // The caller's own session id, for routes that need to say "except me".
+    sessionIdOf (req) { return sessionOf(req) },
+
+    // LOG OUT EVERYWHERE - the button people look for after handing a laptop
+    // back. Every session dies except the one given, so the operator pressing
+    // it is not dumped onto the login page of the dashboard they are holding.
+    // Returns how many browsers were logged out, so the page can say it.
+    logoutEverywhere (keep = null) {
+      const kept = keep && sessions.has(keep)
+      const dropped = sessions.size - (kept ? 1 : 0)
+      sessions.clear()
+      if (kept) sessions.add(keep)
+      return dropped
     }
   }
 }
