@@ -279,3 +279,39 @@ test('TWO APPS ON ONE BOX DO NOT SHARE A SESSION', () => {
 test('an app slug is required, because a nameless cookie is a shared cookie', () => {
   assert.throws(() => createDashboardAuth({ password: 'x' }), /needs an app slug/)
 })
+
+test('LOG OUT EVERYWHERE drops every session except the one that pressed the button', async (t) => {
+  const auth = createDashboardAuth({ app: 'pearcinema', password: 'hunter2' })
+  const server = http.createServer((req, res) => {
+    const url = new URL(req.url, 'http://localhost')
+    if (auth.handle(req, res, url)) return
+    res.writeHead(auth.guard(req) ? 200 : 401); res.end('x')
+  })
+  await new Promise(r => server.listen(0, '127.0.0.1', r))
+  t.after(() => server.close())
+  const base = `http://127.0.0.1:${server.address().port}`
+
+  const login = async () => {
+    const res = await fetch(base + '/api/login', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ password: 'hunter2' }) })
+    return res.headers.get('set-cookie').split(';')[0]
+  }
+
+  // Three browsers. The laptop that was handed back is two of them.
+  const mine = await login()
+  const laptop = await login()
+  const tablet = await login()
+  const check = async (cookie) => (await fetch(base + '/x', { headers: { cookie } })).status
+
+  assert.equal(await check(laptop), 200)
+
+  const dropped = auth.logoutEverywhere(auth.sessionIdOf(reqOf(mine)))
+  assert.equal(dropped, 2, 'two other browsers were logged out')
+
+  assert.equal(await check(mine), 200, 'the presser stays logged in')
+  assert.equal(await check(laptop), 401)
+  assert.equal(await check(tablet), 401)
+
+  // Without a session to keep - a script, say - everything goes.
+  assert.equal(auth.logoutEverywhere(null), 1)
+  assert.equal(await check(mine), 401)
+})
