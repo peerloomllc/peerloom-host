@@ -580,3 +580,36 @@ test('re-granting a known device keeps its name, claim, person and seen history'
   assert.equal(fresh.label, '', 'nothing carries across a revoke')
   assert.equal(fresh.claimedUser, null)
 })
+
+test('A DEVICE THAT RENAMES ITSELF WHILE ASSIGNED CAN BE LEFT WHERE IT IS', async (t) => {
+  // The answer the store could not express. confirmClaim only ever means "turn this
+  // claim into an assignment", so a device that re-claimed while assigned was stuck
+  // pending: move it to a person of the new name, or detach it and start again, and
+  // nothing else (Tim, 2026-08-20, after renaming his TCL from the phone).
+  const g = await store(t)
+  const dev = await g.grant({ deviceKey: key(), label: 'TCL' })
+  await g.setIdentity(dev.deviceKey, { userName: 'Tim Test' })
+  await g.confirmClaim(dev.deviceKey)
+  const personId = (await g.get(dev.deviceKey)).personId
+
+  // The device renames itself, which is pending again - that IS the checkpoint.
+  await g.setIdentity(dev.deviceKey, { userName: 'Tim TCL2' })
+  assert.equal(confirmedClaim(await g.get(dev.deviceKey), await g.getPerson(personId)), false)
+
+  const row = await g.settleClaim(dev.deviceKey)
+  assert.equal(row.personId, personId, 'it did not move')
+  assert.equal(row.claimedUser, 'Tim TCL2', 'and it still calls itself what it said')
+  assert.ok(confirmedClaim(row, await g.getPerson(personId)), 'it just stopped asking')
+})
+
+test('settling a claim grants nothing - an unassigned device stays unassigned', async (t) => {
+  // The checkpoint from proposal 2026-07-14: a device may never pick which person it
+  // is. Settling only ever writes down the name, so it cannot become that route.
+  const g = await store(t)
+  await g.addPerson('Ada')
+  const dev = await g.grant({ deviceKey: key(), label: 'phone' })
+  await g.setClaim(dev.deviceKey, { claimedUser: 'Ada' })
+
+  const row = await g.settleClaim(dev.deviceKey)
+  assert.equal(row.personId, null, 'still nobody s')
+})

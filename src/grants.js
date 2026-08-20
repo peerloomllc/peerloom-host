@@ -452,6 +452,26 @@ class Grants {
     return out
   }
 
+  // "I HAVE SEEN THE NEW NAME, AND THIS DEVICE IS STILL WHOSE IT WAS."
+  //
+  // The answer the store had no way to express. confirmClaim only ever means "turn
+  // this claim into an assignment", so a device that renames ITSELF while already
+  // assigned was stuck pending forever: the operator could either move it to a
+  // person of the new name or detach it and start again, and nothing else (Tim,
+  // 2026-08-20, after renaming his TCL from the phone).
+  //
+  // It grants nothing. personId is untouched, so this can never become a route by
+  // which a device joins somebody - the checkpoint from proposal 2026-07-14 is that
+  // a device may not pick which person it is, and this does not let it.
+  async settleClaim (deviceKey) {
+    const key = Grants.keyOf(deviceKey)
+    const row = await this.get(key)
+    if (!row || !row.claimedUser) return null
+    row.confirmedUser = cleanName(row.claimedUser)
+    await this.bee.put('grant:' + key, row, { valueEncoding: 'json' })
+    return row
+  }
+
   // Every LIVE person holding this name - what the dashboard needs to know whether confirming is
   // unambiguous (0 or 1) or a choice (2+).
   async personsByName (name) {
