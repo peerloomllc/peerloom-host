@@ -42,6 +42,7 @@ module.exports = {
   // back onto the list.
   Grants: grants.Grants,
   personLabels: grants.personLabels,
+  confirmedClaim: grants.confirmedClaim,
 
   createIdentity: identity.createIdentity,
   loadOrCreateSeed: identity.loadOrCreateSeed,

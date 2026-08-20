@@ -13,7 +13,7 @@ const Hyperbee = require('hyperbee')
 const hcrypto = require('hypercore-crypto')
 const z32 = require('z32')
 
-const { Grants } = require('../src/grants')
+const { Grants, confirmedClaim } = require('../src/grants')
 const { decide } = require('../src/gate')
 
 async function store (t) {
@@ -188,7 +188,12 @@ test('renamePerson refuses colliding with another live person (the "one Tim" rul
   assert.equal((await g.getPerson(ada.id)).name, 'Ada')
 })
 
-test('renamePerson keeps assigned devices confirmed (syncs their claim to the new name)', async (t) => {
+test('RENAMING A PERSON LEAVES WHAT THEIR DEVICE CALLS ITSELF ALONE', async (t) => {
+  // It used to sync the claim to the new name, because confirmation was inferred
+  // from the two matching - so an operator fixing a typo silently rewrote what
+  // somebody's own phone called them, in the field they had set it in (Tim,
+  // 2026-08-20). The confirmation is recorded now, so the two names are free to
+  // differ and the device stays confirmed through the rename.
   const g = await store(t)
   const dev = await g.grant({ deviceKey: key(), label: 'phone' })
   await g.setIdentity(dev.deviceKey, { userName: 'Tim' })
@@ -197,10 +202,58 @@ test('renamePerson keeps assigned devices confirmed (syncs their claim to the ne
   await g.renamePerson(person.personId, 'Timothy')
 
   const row = await g.get(dev.deviceKey)
-  // Claim followed the rename, so the dashboard's claimMismatch stays false (the device
-  // remains under the person instead of dropping into "Needs confirmation").
-  assert.equal(row.claimedUser, 'Timothy')
-  assert.equal(row.personId, person.personId)
+  assert.equal(row.claimedUser, 'Tim', 'the device still calls itself what it said')
+  assert.equal(row.personId, person.personId, 'and it is still theirs')
+  assert.ok(confirmedClaim(row, await g.getPerson(person.personId)),
+    'and still confirmed, so it does not drop back into Needs confirming')
+})
+
+test('a device changing its OWN name is pending again, which is the whole checkpoint', async (t) => {
+  // The claim moves and the recorded confirmation does not. A device may never
+  // decide which person it is - "claims to be Sam" must not be enough to sit down
+  // beside the real Sam.
+  const g = await store(t)
+  const dev = await g.grant({ deviceKey: key(), label: 'phone' })
+  await g.setIdentity(dev.deviceKey, { userName: 'Tim' })
+  const person = await g.confirmClaim(dev.deviceKey)
+
+  await g.setIdentity(dev.deviceKey, { userName: 'Sam' })
+  const row = await g.get(dev.deviceKey)
+  assert.equal(confirmedClaim(row, await g.getPerson(person.personId)), false)
+})
+
+test('A BOX GRANTED BEFORE ANY OF THIS READS EXACTLY AS IT DID', async (t) => {
+  // Rows written before confirmation was recorded carry no confirmedUser, so the
+  // answer falls back to the old comparison - and a rename backfills them from it
+  // while the old name is still there to compare against.
+  const g = await store(t)
+  const ada = await g.addPerson('Ada')
+  const dev = await g.grant({ deviceKey: key(), label: 'phone' })
+  await g.setClaim(dev.deviceKey, { claimedUser: 'Ada' })
+  await g.assign(dev.deviceKey, ada.id)
+
+  const before = await g.get(dev.deviceKey)
+  assert.equal(before.confirmedUser, null, 'nothing recorded, as on an old box')
+  assert.ok(confirmedClaim(before, ada), 'and it still reads as confirmed')
+
+  await g.renamePerson(ada.id, 'Adele')
+  const after = await g.get(dev.deviceKey)
+  assert.equal(after.confirmedUser, 'Ada', 'the rename wrote down what was already true')
+  assert.equal(after.claimedUser, 'Ada', 'without touching the claim')
+  assert.ok(confirmedClaim(after, await g.getPerson(ada.id)))
+})
+
+test('a device that was NOT confirmed is not confirmed by somebody else being renamed', async (t) => {
+  const g = await store(t)
+  const ada = await g.addPerson('Ada')
+  const dev = await g.grant({ deviceKey: key(), label: 'phone' })
+  await g.setClaim(dev.deviceKey, { claimedUser: 'Grace' })
+  await g.assign(dev.deviceKey, ada.id)
+
+  await g.renamePerson(ada.id, 'Adele')
+  const row = await g.get(dev.deviceKey)
+  assert.equal(row.confirmedUser, null, 'nothing to write down')
+  assert.equal(confirmedClaim(row, await g.getPerson(ada.id)), false)
 })
 
 test('a person whose only devices are REVOKED can be deleted', async (t) => {
@@ -526,4 +579,37 @@ test('re-granting a known device keeps its name, claim, person and seen history'
   const fresh = await g.grant({ deviceKey: kp.publicKey, label: '' })
   assert.equal(fresh.label, '', 'nothing carries across a revoke')
   assert.equal(fresh.claimedUser, null)
+})
+
+test('A DEVICE THAT RENAMES ITSELF WHILE ASSIGNED CAN BE LEFT WHERE IT IS', async (t) => {
+  // The answer the store could not express. confirmClaim only ever means "turn this
+  // claim into an assignment", so a device that re-claimed while assigned was stuck
+  // pending: move it to a person of the new name, or detach it and start again, and
+  // nothing else (Tim, 2026-08-20, after renaming his TCL from the phone).
+  const g = await store(t)
+  const dev = await g.grant({ deviceKey: key(), label: 'TCL' })
+  await g.setIdentity(dev.deviceKey, { userName: 'Tim Test' })
+  await g.confirmClaim(dev.deviceKey)
+  const personId = (await g.get(dev.deviceKey)).personId
+
+  // The device renames itself, which is pending again - that IS the checkpoint.
+  await g.setIdentity(dev.deviceKey, { userName: 'Tim TCL2' })
+  assert.equal(confirmedClaim(await g.get(dev.deviceKey), await g.getPerson(personId)), false)
+
+  const row = await g.settleClaim(dev.deviceKey)
+  assert.equal(row.personId, personId, 'it did not move')
+  assert.equal(row.claimedUser, 'Tim TCL2', 'and it still calls itself what it said')
+  assert.ok(confirmedClaim(row, await g.getPerson(personId)), 'it just stopped asking')
+})
+
+test('settling a claim grants nothing - an unassigned device stays unassigned', async (t) => {
+  // The checkpoint from proposal 2026-07-14: a device may never pick which person it
+  // is. Settling only ever writes down the name, so it cannot become that route.
+  const g = await store(t)
+  await g.addPerson('Ada')
+  const dev = await g.grant({ deviceKey: key(), label: 'phone' })
+  await g.setClaim(dev.deviceKey, { claimedUser: 'Ada' })
+
+  const row = await g.settleClaim(dev.deviceKey)
+  assert.equal(row.personId, null, 'still nobody s')
 })

@@ -40,7 +40,7 @@ const b4a = require('b4a')
 const z32 = require('z32')
 
 const { createIdentity } = require('./identity')
-const { Grants } = require('./grants')
+const { Grants, confirmedClaim } = require('./grants')
 const { UserState } = require('./state')
 const { decide, sweepKills, Connections } = require('./gate')
 const { Presence, notifyOwners } = require('./presence')
@@ -583,15 +583,22 @@ class LibraryHost {
   // Every grant row, with whether the device is online right now and who it belongs
   // to - disambiguated where two people share a name, so a revoke button names the
   // same Sam everywhere. `claimedUser` stays raw: it is only what the device SAID.
+  //
+  // `confirmed` is ANSWERED HERE rather than left to each caller to work out. It used
+  // to be re-derived on every surface by comparing the person's name with the claim,
+  // which is what forced renamePerson to overwrite what a device called itself - and
+  // three copies of a rule is three chances for one of them to drift.
   async listDevices () {
     const rows = await this.grants.list()
     const personLabel = await this.grants.personLabels()
+    const byId = new Map((await this.grants.listPersons()).map(p => [p.id, p]))
     return Promise.all(rows.map(async r => {
       const online = this.connections.count(r.deviceKey) > 0
       const row = {
         ...r,
         online,
-        belongsTo: r.personId ? (personLabel.get(r.personId) || null) : null
+        belongsTo: r.personId ? (personLabel.get(r.personId) || null) : null,
+        confirmed: confirmedClaim(r, r.personId ? byId.get(r.personId) : null)
       }
       return this._decorateDevice ? await this._decorateDevice(row, { online }) : row
     }))
