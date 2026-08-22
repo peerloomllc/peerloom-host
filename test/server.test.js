@@ -230,15 +230,68 @@ test('REVOKE CUTS A LIVE CONNECTION, not just the next one', async (t) => {
   const outcome = await Promise.race([closed, settle(3000).then(() => 'still-alive')])
   assert.equal(outcome, 'closed', 'the socket must die, not merely be marked revoked')
 
-  // And it cannot come back.
+  // AND IT CANNOT COME BACK - which since 2026-08-22 is a stronger claim than "the
+  // socket does not open", because one socket does now open: a revoked device is told
+  // it was revoked, once, and destroyed (proposal
+  // 2026-08-22-say-goodbye-to-a-revoked-device). The guarantee is about ACCESS.
+  const pushes = []
   const again = dev.connect(h.publicKey)
+  const goodbye = openMedia(again, h.libraryId, { onpush: (m) => pushes.push(m) })
+
+  // Nothing on that channel answers. `ping` is served by the package itself, ahead of
+  // any app's method table, so if anything at all were dispatching here this would
+  // come back - which makes it the sharpest probe available.
+  const answered = await Promise.race([
+    goodbye.call('ping').then(() => 'answered').catch(() => 'no'),
+    settle(2500).then(() => 'silent')
+  ])
+  assert.equal(answered, 'silent', 'a revoked device must not reach a single method')
+  assert.deepEqual(pushes.map(p => p.kind), ['access:revoked'], 'but it IS told why')
+  assert.equal(pushes[0].data.reason, 'device-revoked')
+
+  // And the HOST lets it go without being asked to. Asserted on the host's own
+  // registry rather than on a 'close' event at the device: a destroyed hyperdht
+  // stream does not reliably wake the far end until something writes, which is
+  // precisely why the goodbye is a message and not a hang-up. The phone hangs up
+  // when it hears it.
+  await settle(600)
+  assert.equal(h.connections.count(z32.encode(dev.publicKey)), 0, 'the host holds nothing for a revoked device')
+  again.destroy()
+
+  // The goodbye is said ONCE. The next attempt is refused exactly as before, so a
+  // phone that ignores it cannot use this path to keep a host answering.
+  const third = dev.connect(h.publicKey)
   const back = await Promise.race([
-    new Promise(r => again.on('open', () => r('readmitted'))),
-    new Promise(r => again.on('close', () => r('refused'))),
+    new Promise(r => third.on('open', () => r('readmitted'))),
+    new Promise(r => third.on('close', () => r('refused'))),
     settle(4000).then(() => 'refused')
   ])
   assert.equal(back, 'refused')
-  again.destroy()
+  third.destroy()
+})
+
+test('A STRANGER IS STILL TOLD NOTHING, which is the half that must not regress', async (t) => {
+  // The goodbye exists for a device this host once granted. A key that never paired is
+  // the case the old silence rule was written for: no connection, no channel, no push,
+  // no hint that anything is here at all.
+  const { h, testnet } = await host(t)
+  const dev = device(testnet)
+  t.after(() => dev.destroy())
+
+  const pushes = []
+  const conn = dev.connect(h.publicKey)
+  const opened = await Promise.race([
+    new Promise(r => conn.on('open', () => r('opened'))),
+    new Promise(r => conn.on('close', () => r('refused'))),
+    settle(4000).then(() => 'refused')
+  ])
+  if (opened === 'opened') {
+    // Even if the transport opens, nothing may speak on it.
+    openMedia(conn, h.libraryId, { onpush: (m) => pushes.push(m) })
+    await settle(1500)
+  }
+  assert.deepEqual(pushes, [], 'an unknown key is told nothing at all')
+  conn.destroy()
 })
 
 test('revoke calls silence(), because a cast target is not a HyperDHT connection', async (t) => {

@@ -67,6 +67,7 @@ module.exports = {
   // contract - and owns media.stream, because gating a byte stream on a live grant
   // must not be reimplemented per app.
   serveMedia: media.serveMedia,
+  serveFarewell: media.serveFarewell,
   ownerOf: media.ownerOf,
   MethodError: media.MethodError,
 

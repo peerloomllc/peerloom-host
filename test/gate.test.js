@@ -12,7 +12,7 @@ const EventEmitter = require('events')
 const hcrypto = require('hypercore-crypto')
 const z32 = require('z32')
 
-const { decide, sweepKills, carryOverPerson, Connections } = require('../src/gate')
+const { decide, mayBeToldWhy, sweepKills, carryOverPerson, Connections } = require('../src/gate')
 
 const NOW = 1_000_000
 const okGrant = (over = {}) => ({
@@ -50,6 +50,27 @@ test('decide: a device of a revoked PERSON is denied even though its own grant i
     person: { id: 'p1', revokedAt: NOW - 1 }
   }, NOW)
   assert.deepEqual(r, { allow: false, reason: 'person-revoked' })
+})
+
+test('WHO MAY BE TOLD WHY, which is a much shorter list than who is refused', () => {
+  // A stranger learns nothing, exactly as before. Somebody this host once let in has
+  // already proved possession of a key it granted, so "not any more" leaks nothing
+  // they do not hold already (proposal 2026-08-22-say-goodbye-to-a-revoked-device).
+  assert.equal(mayBeToldWhy('device-revoked'), true)
+  assert.equal(mayBeToldWhy('person-revoked'), true)
+  assert.equal(mayBeToldWhy('grant-expired'), true)
+
+  // THE ONE THAT MUST STAY SILENT. An unknown key is the attacker case the old rule
+  // was written for, and it is still covered.
+  assert.equal(mayBeToldWhy('no-grant'), false)
+  assert.equal(mayBeToldWhy('ok'), false)
+  assert.equal(mayBeToldWhy(undefined), false)
+
+  // And every reason decide() can produce is decided here rather than by default:
+  // a new refusal reason must be added to one list or the other on purpose.
+  for (const reason of ['no-grant', 'device-revoked', 'grant-expired', 'person-revoked']) {
+    assert.equal(typeof mayBeToldWhy(reason), 'boolean', reason)
+  }
 })
 
 test('decide: a device of a live person is allowed', () => {

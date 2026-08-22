@@ -29,6 +29,23 @@ function decide ({ grant, person }, now = Date.now()) {
   return { allow: true, reason: 'ok' }
 }
 
+// WHICH REFUSALS MAY BE EXPLAINED TO THE PEER, and it is a short list on purpose.
+//
+// `decide()`'s reason is not sent to a peer, because telling an attacker why they
+// were refused is free intelligence. That rule is right for a STRANGER and wrong for
+// somebody this host once let in: a device holding a tombstoned grant has already
+// proved possession of a key this host granted, so it knows the library exists, knows
+// it had access, and holds the host key. There is nothing left to leak by saying "not
+// any more" (proposal 2026-08-22-say-goodbye-to-a-revoked-device).
+//
+// `no-grant` is deliberately NOT on this list. An unknown key learns nothing, exactly
+// as before, and cannot use this path to make a host talk.
+const FAREWELL_REASONS = new Set(['device-revoked', 'person-revoked', 'grant-expired'])
+
+function mayBeToldWhy (reason) {
+  return FAREWELL_REASONS.has(reason)
+}
+
 // Which of the currently-LIVE devices should be cut right now? Pure, so the sweep's
 // selection is unit-testable without a DHT or a clock. `lookups` maps deviceKey ->
 // { grant, person }; the caller (the host) loads them, then kills what this returns.
@@ -133,4 +150,4 @@ class Connections {
   }
 }
 
-module.exports = { decide, sweepKills, carryOverPerson, Connections }
+module.exports = { decide, mayBeToldWhy, sweepKills, carryOverPerson, Connections }

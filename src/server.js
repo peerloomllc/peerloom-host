@@ -42,10 +42,10 @@ const z32 = require('z32')
 const { createIdentity } = require('./identity')
 const { Grants, confirmedClaim } = require('./grants')
 const { UserState } = require('./state')
-const { decide, sweepKills, Connections } = require('./gate')
+const { decide, mayBeToldWhy, sweepKills, Connections } = require('./gate')
 const { Presence, notifyOwners } = require('./presence')
 const { PairSession } = require('./pair')
-const { serveMedia } = require('./media')
+const { serveMedia, serveFarewell } = require('./media')
 const { pruneRocksLogs } = require('./logprune')
 
 // How often to sweep live connections for an expired guest grant. `decide()` covers
@@ -72,6 +72,11 @@ const TOPIC_EARLY_REANNOUNCE_MS = [20 * 1000, 60 * 1000, 120 * 1000]
 // prune the rest. RocksDB rotates them only on reopen, so pruning at startup keeps
 // the count bounded; the 12h re-prune is cheap insurance. NOT data - the
 // .sst/.log/MANIFEST are never touched.
+// A refused device is told once a minute at most, and the memory of who has been told
+// is capped - it is keyed by a remote public key, which a peer can mint at will.
+const FAREWELL_EVERY_MS = 60_000
+const FAREWELL_MEMORY = 256
+
 const ROCKS_LOG_KEEP = 3
 const ROCKS_LOG_PRUNE_MS = 12 * 60 * 60_000
 
@@ -168,6 +173,9 @@ class LibraryHost {
     this.userState = new UserState(this.stateBee, state)
 
     this.connections = new Connections()
+    // Who has been told their grant is gone, and when - see _shouldSayFarewell.
+    this._farewellAt = new Map()
+    this._farewellReasons = new Map()
 
     // The registry that lets a request on one device's connection push to another
     // device's connection. Only ever holds channels the firewall already admitted; a
@@ -328,7 +336,39 @@ class LibraryHost {
       return false
     }
 
+    // A DEVICE WE ONCE LET IN IS TOLD SO, ONCE, and then refused like anybody else.
+    //
+    // Without this a revoked phone says "could not reach the host" and knocks every
+    // nine seconds for ever, and the person blames their network - watched on the TCL,
+    // 2026-08-22. Admitting the connection is what makes a goodbye possible at all;
+    // _onconnection gives it a channel with NO methods on it and destroys it.
+    //
+    // RATE-LIMITED, because this is a socket a refused peer can open. One goodbye per
+    // key per FAREWELL_EVERY_MS; every other attempt is denied exactly as before, so a
+    // phone that ignores the goodbye cannot use it to keep a host answering.
+    if (mayBeToldWhy(reason) && this._shouldSayFarewell(remotePublicKey)) {
+      this.log('gate:farewell', { device: short, reason })
+      this._farewellReasons.set(z32.encode(remotePublicKey), reason)
+      return false
+    }
+
     this.log('gate:deny', { device: short, reason })
+    return true
+  }
+
+  // One goodbye per key per minute, in a map that cannot grow without bound - a peer
+  // could otherwise mint keys and fill it.
+  _shouldSayFarewell (remotePublicKey) {
+    const key = z32.encode(remotePublicKey)
+    const now = Date.now()
+    const last = this._farewellAt.get(key) || 0
+    if (now - last < FAREWELL_EVERY_MS) return false
+    if (this._farewellAt.size >= FAREWELL_MEMORY) {
+      const oldest = this._farewellAt.keys().next().value
+      this._farewellAt.delete(oldest)
+      this._farewellReasons.delete(oldest)
+    }
+    this._farewellAt.set(key, now)
     return true
   }
 
@@ -379,6 +419,20 @@ class LibraryHost {
       // exemption. Reaching the MEDIA api requires a real grant.
       if (!allow) {
         this.log('host:media-denied', { device: short, reason })
+        // The firewall admitted this one to say goodbye. The channel it gets here has
+        // no method table on it, so the device can be told and nothing else.
+        const farewell = this._farewellReasons.get(z32.encode(remoteKey))
+        if (farewell && mayBeToldWhy(reason)) {
+          this._farewellReasons.delete(z32.encode(remoteKey))
+          serveFarewell({
+            protocol: this.protocol,
+            conn,
+            libraryId: this.libraryId,
+            reason,
+            log: (m, d) => this.log(m, { device: short, ...d })
+          })
+          return
+        }
         conn.destroy()
         return
       }
