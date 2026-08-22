@@ -134,8 +134,10 @@ const err = {
 // its JSON payload. Kinds: 'session-superseded' (another of your devices claimed the play-
 // session token, so stop) and 'library-renamed' (the operator renamed this library; data
 // carries { libraryId, libraryName } so a device relabels the right host at once). It rides the same Noise-authenticated,
-// firewall-gated media channel as everything else and dies with the connection, so a
-// revoked device - whose connection the host destroys - can never receive one. Appended
+// firewall-gated media channel as everything else and dies with the connection. The one
+// exception is 'access:revoked', which is the LAST thing a revoked device is ever sent:
+// its channel carries no method table at all, so the goodbye is the only frame it can
+// receive (proposal 2026-08-22-say-goodbye-to-a-revoked-device). Appended
 // LAST (type 5) so every existing type id is preserved: an old client that never
 // registered it simply drops the frame and falls back to lazy presence.
 const push = {

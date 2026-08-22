@@ -334,8 +334,43 @@ function serveMedia ({
   }
 }
 
+// A GOODBYE, AND NOTHING ELSE.
+//
+// The media channel, opened with no dispatch on it at all: one push frame saying the
+// grant is gone, then the connection is destroyed. A device that reaches this cannot
+// browse, cannot stream and cannot call a method, because the method table was never
+// wired to this channel - which is the property that keeps revoke's guarantee intact
+// (proposal 2026-08-22-say-goodbye-to-a-revoked-device).
+//
+// IT IS NOT serveMedia WITH A FLAG, and that is deliberate. A flag on a function that
+// builds the whole API is one `if` away from admitting a revoked device to all of it;
+// a separate function with no `methods` in scope cannot make that mistake.
+//
+// `linger` is how long the frame gets to leave before the socket dies. Protomux writes
+// synchronously, but the socket flush is not, and a goodbye that is destroyed before it
+// lands is worse than no goodbye - it looks exactly like the bug it fixes.
+function serveFarewell ({ protocol, conn, libraryId, reason = 'device-revoked', linger = 250, log = () => {} }) {
+  let sent = false
+  try {
+    const mux = Protomux.from(conn)
+    const built = protocol.channels.mediaChannel(mux, { id: b4a.from(libraryId) })
+    if (built) {
+      built.channel.open()
+      built.messages.push.send({ kind: 'access:revoked', data: { libraryId, reason } })
+      sent = true
+    }
+  } catch (e) {
+    log('media:farewell-failed', { err: e?.message })
+  }
+  const timer = setTimeout(() => { try { conn.destroy() } catch {} }, linger)
+  if (timer.unref) timer.unref()
+  log('media:farewell', { reason, sent })
+  return sent
+}
+
 module.exports = {
   serveMedia,
+  serveFarewell,
   ownerOf,
   MethodError,
   badParams,
