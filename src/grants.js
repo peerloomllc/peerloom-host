@@ -63,6 +63,19 @@ function personLabels (persons) {
   return out
 }
 
+// A paths value is null (everything) or a non-empty list of { root, rel } strings. Anything
+// else - an empty list, a string, junk entries - is refused loudly rather than stored as
+// something the visibility check might read as "nothing" or "everything" by accident.
+function normalisePaths (paths) {
+  if (paths === null || paths === undefined) return null
+  if (!Array.isArray(paths) || paths.length === 0) throw new Error('paths must be null or a non-empty list')
+  return paths.map((p) => {
+    if (!p || typeof p.root !== 'string' || !p.root) throw new Error('every path names its root')
+    const rel = typeof p.rel === 'string' ? p.rel.replace(/^[\\/]+/, '') : ''
+    return { root: p.root, rel }
+  })
+}
+
 class Grants {
   constructor (bee) {
     this.bee = bee
@@ -112,7 +125,7 @@ class Grants {
   // name afterwards, over the media channel. They are parameters only so a device returning
   // to its own person (proposal 2026-07-21-person-carryover-on-repair) comes back with the
   // claim it already had, rather than reading as assigned-but-unclaimed on the dashboard.
-  async grant ({ deviceKey, personId = null, label = '', platform = '', scope = SCOPE.FULL, grantedBy = 'operator', expiresAt = null, claimedUser = null, claimedAt = null }) {
+  async grant ({ deviceKey, personId = null, label = '', platform = '', scope = SCOPE.FULL, grantedBy = 'operator', expiresAt = null, paths = undefined, claimedUser = null, claimedAt = null }) {
     const key = Grants.keyOf(deviceKey)
     // RE-GRANTING AN ALREADY-KNOWN DEVICE MUST NOT AMNESIA IT. An owner
     // promotion or a guest extension is a re-pair, and the fresh row used to
@@ -132,7 +145,13 @@ class Grants {
       grantedAt: Date.now(),
       grantedBy,
       expiresAt, // null = never; a timestamp = a time-limited GUEST grant (gate.decide denies past it)
-      paths: null, // reserved: v2 library-subset scopes
+      // WHICH PART OF THE LIBRARY THIS DEVICE MAY SEE. null is everything. Otherwise a
+      // list of { root, rel } prefixes (a root's absolute path, a folder path under it,
+      // '' for the whole root), set per PERSON through setPersonPaths so every device of
+      // one person sees the same library. The app decides what a prefix means for its
+      // items; this store only keeps it. Survives a re-pair like the claim does: a
+      // guest scanning again to extend their pass must not be widened by it.
+      paths: paths === undefined ? (keep?.paths ?? null) : normalisePaths(paths),
       claimedUser: claimedUser ?? keep?.claimedUser ?? null,
       claimedAt: claimedAt ?? keep?.claimedAt ?? null,
       // Survives a re-pair like the claim it belongs to: promoting a phone to owner
@@ -160,6 +179,32 @@ class Grants {
   // Change a device's scope (proposal 2026-07-24, P2). Used to PROMOTE an already-paired
   // device to owner when it re-pairs through the dashboard's owner window. Host-only writer,
   // like every other grant mutation.
+  // Narrow (or widen back to everything) what ONE device may see. null is everything.
+  // Prefer setPersonPaths: a person's devices must agree, or a film hidden on the phone
+  // is a tap away on the tablet.
+  async setPaths (deviceKey, paths) {
+    const key = Grants.keyOf(deviceKey)
+    const row = await this.get(key)
+    if (!row || row.revokedAt) return null
+    row.paths = normalisePaths(paths)
+    await this.bee.put('grant:' + key, row, { valueEncoding: 'json' })
+    return row
+  }
+
+  // The same, for every live device of a person at once. Returns the rows changed.
+  async setPersonPaths (personId, paths) {
+    const person = await this.getPerson(personId)
+    if (!person || person.revokedAt) return []
+    const out = []
+    for (const row of await this.list()) {
+      if (row.personId !== personId || row.revokedAt) continue
+      row.paths = normalisePaths(paths)
+      await this.bee.put('grant:' + row.deviceKey, row, { valueEncoding: 'json' })
+      out.push(row)
+    }
+    return out
+  }
+
   async setScope (deviceKey, scope) {
     const key = Grants.keyOf(deviceKey)
     const row = await this.get(key)
@@ -519,4 +564,4 @@ function confirmedClaim (row, person) {
   return cleanName(person.name).toLowerCase() === claim
 }
 
-module.exports = { Grants, personLabels, confirmedClaim, b4a }
+module.exports = { Grants, normalisePaths, personLabels, confirmedClaim, b4a }
