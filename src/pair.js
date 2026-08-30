@@ -46,7 +46,7 @@ class PairSession {
   // `protocol` is the object from createProtocol(). It supplies the pair channel
   // and the link encoder, which is what stops one app's pairing window from ever
   // admitting another app's phone: the channel simply never opens.
-  constructor ({ protocol, identity, grants, libraryName, ttl = PAIR_TTL_MS, expiresMs = null, owner = false, log = () => {}, onpaired = null }) {
+  constructor ({ protocol, identity, grants, libraryName, ttl = PAIR_TTL_MS, expiresMs = null, owner = false, paths = undefined, log = () => {}, onpaired = null }) {
     if (!protocol || !protocol.channels || !protocol.link) {
       throw new Error('PairSession needs a protocol from createProtocol()')
     }
@@ -63,6 +63,11 @@ class PairSession {
     // Set host-side by the dashboard only - a phone never asserts its own scope, same
     // rule as the guest expiry above. Mutually exclusive with guest.
     this.owner = !!owner
+    // WHAT A DEVICE PAIRED THROUGH THIS WINDOW MAY SEE. undefined leaves the grant's
+    // own rule alone (everything, for a device that has never paired); a list narrows
+    // it from the first second, so somebody can be let in narrowly rather than let in
+    // wide and narrowed afterwards.
+    this.paths = paths
     this.log = log
     this.onpaired = onpaired
 
@@ -151,6 +156,11 @@ class PairSession {
         // dashboard changes an owner's scope - so we only ever raise scope here, not lower it.
         if (this.owner && existing.scope !== SCOPE.OWNER) await this.grants.setScope(remoteKey, SCOPE.OWNER)
 
+        // A window that names what may be seen says so for a device that was already
+        // paired too - scanning a narrower QR is how an operator narrows one device
+        // without going to the People page. A window that says nothing changes nothing.
+        if (this.paths !== undefined) await this.grants.setPaths(remoteKey, this.paths)
+
         this.log('pair:already-granted', {
           device: z32.encode(remoteKey).slice(0, 8),
           label: hello.label || existing.label,
@@ -178,7 +188,10 @@ class PairSession {
           // Carried with the person, so the dashboard does not show it assigned yet
           // claiming nobody (claimMismatch reads these two together).
           claimedUser: restored ? (existing.claimedUser ?? null) : null,
-          claimedAt: restored ? (existing.claimedAt ?? null) : null
+          claimedAt: restored ? (existing.claimedAt ?? null) : null,
+          // undefined here means "whatever the grant already said", which for a device
+          // that has never paired is everything.
+          paths: this.paths
         })
         this.log('pair:granted', {
           device: z32.encode(remoteKey).slice(0, 8),

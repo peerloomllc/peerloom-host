@@ -260,3 +260,40 @@ test('tokenEquals is length-checked and rejects non-32-byte input', () => {
   assert.equal(tokenEquals(null, a), false)
   assert.equal(tokenEquals(a, null), false)
 })
+
+test('A WINDOW CAN NAME WHAT THE DEVICE MAY SEE, so somebody is let in narrowly rather than narrowed after', async (t) => {
+  // PearCinema proposals/2026-08-30-per-person-folders.md, open question 1. Until now a
+  // person was let in with the whole library and narrowed on the People page afterwards,
+  // which is a window - however short - where they could see everything.
+  const paths = [{ root: '/srv/films', rel: 'kids' }]
+  const { s, grants } = await session(t, { paths })
+  const dev = hcrypto.keyPair().publicKey
+  const w = fakeWire()
+
+  await s._onhello({ rv: s.rv, deviceKey: dev, label: 'Kid phone', platform: 'android' }, w.conn, dev, w.built)
+
+  const grant = await grants.get(dev)
+  assert.deepEqual(grant.paths, paths, 'the grant is narrowed from its first second')
+  assert.equal(grant.scope, SCOPE.FULL, 'and is an ordinary grant in every other way')
+})
+
+test('a window that says nothing about folders leaves an existing narrowing alone', async (t) => {
+  const dev = hcrypto.keyPair().publicKey
+  const { s, grants } = await session(t)
+  const w = fakeWire()
+  await s._onhello({ rv: s.rv, deviceKey: dev, label: 'phone', platform: 'android' }, w.conn, dev, w.built)
+  await grants.setPaths(dev, [{ root: '/srv/films', rel: 'kids' }])
+
+  // Re-scanning an ordinary QR is how somebody re-pairs; it must not quietly widen them.
+  // The same store throughout, which is what one host has.
+  const again = await session(t, { grants })
+  const w2 = fakeWire()
+  await again.s._onhello({ rv: again.s.rv, deviceKey: dev, label: 'phone', platform: 'android' }, w2.conn, dev, w2.built)
+  assert.deepEqual((await grants.get(dev)).paths, [{ root: '/srv/films', rel: 'kids' }], 'still narrowed')
+
+  // And a window that DOES name folders re-narrows a device that already paired.
+  const wide = await session(t, { grants, paths: null })
+  const w3 = fakeWire()
+  await wide.s._onhello({ rv: wide.s.rv, deviceKey: dev, label: 'phone', platform: 'android' }, w3.conn, dev, w3.built)
+  assert.equal((await grants.get(dev)).paths, null, 'a window naming "everything" widens it')
+})
