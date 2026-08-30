@@ -478,7 +478,7 @@ class LibraryHost {
   // permanent window.
   // Returns the LINK STRING, matching the donor, so PearTune's dashboard and its
   // owner.pairStart method migrate without a call-site change.
-  startPairing ({ expiresMs = null, owner = false } = {}) {
+  startPairing ({ expiresMs = null, owner = false, paths = undefined } = {}) {
     // Owner XOR guest: an owner window ignores any expiry (an owner is permanent by
     // definition; a time-limited owner would be a footgun).
     if (owner) expiresMs = null
@@ -488,7 +488,10 @@ class LibraryHost {
     // kind, so the three window types never silently hand back the wrong one.
     if (this.pairing) {
       const openMs = this.pairSession.expiresMs || null
-      const sameKind = (openMs ? 1 : 0) === (expiresMs ? 1 : 0) && !!this.pairSession.owner === !!owner
+      // The narrowing is part of a window's kind: a window opened for the whole library
+      // must not be handed back to somebody asking for a narrowed one.
+      const samePaths = JSON.stringify(this.pairSession.paths ?? null) === JSON.stringify(paths ?? null)
+      const sameKind = (openMs ? 1 : 0) === (expiresMs ? 1 : 0) && !!this.pairSession.owner === !!owner && samePaths
       if (sameKind) return this.pairSession.link
       this.pairSession.close('operator')
     }
@@ -500,13 +503,14 @@ class LibraryHost {
       libraryName: this.libraryName,
       expiresMs: expiresMs && expiresMs > 0 ? expiresMs : null,
       owner: !!owner,
+      paths,
       log: this.log,
       // A device pairing in changes the roster every owner sees, so refresh their
       // live view.
       onpaired: () => this.notifyOwnersDevicesChanged()
     })
 
-    this.log('pair:open', { ttlMs: this.pairSession.ttl, guest: !!this.pairSession.expiresMs, owner: !!owner })
+    this.log('pair:open', { ttlMs: this.pairSession.ttl, guest: !!this.pairSession.expiresMs, owner: !!owner, narrowed: Array.isArray(paths) ? paths.length : null })
     return this.pairSession.link
   }
 
