@@ -574,6 +574,25 @@ class LibraryHost {
     return { grant: row, killed, silenced }
   }
 
+  // Narrow what a person may see (null = everything), and make it TRUE IMMEDIATELY on
+  // every live connection of every device of theirs, the way assignDevice does - the
+  // grant snapshot is swapped in place and the device told, so its next list is the
+  // narrower one without a reconnect. Which items a prefix hides is the app's business.
+  async setPersonPaths (personId, paths) {
+    const rows = await this.grants.setPersonPaths(personId, paths)
+    let refreshed = 0
+    let notified = 0
+    for (const row of rows) {
+      for (const h of this._mediaHandles.get(row.deviceKey) || []) {
+        if (h.setGrant(row)) refreshed++
+      }
+      notified += this.presence.notify(row.deviceKey, 'grant:changed', { personId: row.personId || null, paths: row.paths })
+    }
+    this.log('host:paths-set', { personId, devices: rows.length, narrowed: rows[0] ? rows[0].paths !== null : null, refreshed, notified })
+    this.notifyOwnersDevicesChanged()
+    return { grants: rows, refreshed, notified }
+  }
+
   // Assign a device to a person - and make it TRUE IMMEDIATELY, not at the
   // device's next reconnect. A grant otherwise travels at connect time only,
   // so a phone watching mid-assignment kept filing its positions under the old
