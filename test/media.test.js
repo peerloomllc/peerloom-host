@@ -159,6 +159,35 @@ test('THE READONLY CHOKEPOINT fires ahead of the handler, not inside it', async 
   assert.deepEqual((await h.call('resume.get')).body, { position: 42 })
 })
 
+test('DEMOTING A LIVE DEVICE TAKES ITS WRITES AWAY AT ONCE, not at its next connect', async (t) => {
+  // The chokepoint read the CONNECT-TIME grant while every other read in media.js
+  // follows `liveGrant`, which `setGrant` swaps in place. Nothing exercised the
+  // difference because the only caller promotes a device to owner - so a demotion
+  // would have shipped as "the phone kept writing for as long as it stayed connected",
+  // which is the same shape as revoke not killing live connections.
+  const h = harness(t, {
+    mutating: ['resume.set'],
+    methods: {
+      'resume.set': async () => ({ ok: true }),
+      'resume.get': async () => ({ position: 42 })
+    }
+  })
+
+  assert.deepEqual((await h.call('resume.set')).body, { ok: true }, 'full access to begin with')
+
+  assert.equal(h.served.setGrant({ ...h.grant, scope: SCOPE.READONLY }), true)
+
+  const res = await h.call('resume.set')
+  assert.equal(res.kind, 'err')
+  assert.equal(res.code, ERR.FORBIDDEN, 'the same connection is read-only now')
+  // And it is a demotion, not a disconnection: reading still works.
+  assert.deepEqual((await h.call('resume.get')).body, { position: 42 })
+
+  // Back the other way, since setGrant is what promotes a device to owner today.
+  h.served.setGrant({ ...h.grant, scope: SCOPE.FULL })
+  assert.deepEqual((await h.call('resume.set')).body, { ok: true })
+})
+
 test('a FULL grant passes the same chokepoint', async (t) => {
   const h = harness(t, {
     mutating: ['resume.set'],
