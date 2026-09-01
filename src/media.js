@@ -274,7 +274,14 @@ function serveMedia ({
 
     // The scope chokepoint. One place, ahead of every handler, so a new mutating
     // method cannot ship without it.
-    if (mutatingSet.has(method) && grant?.scope === SCOPE.READONLY) {
+    //
+    // `liveGrant`, NEVER the connect-time `grant`. `setGrant` swaps the row in place
+    // on a live connection and every other read in this file already follows it; this
+    // one did not, so a device demoted to read-only mid-connection would keep writing
+    // until it happened to reconnect. Harmless while the only caller promotes a device
+    // to owner, which is exactly the kind of harmless that stops being harmless the
+    // day a dashboard control can demote one.
+    if (mutatingSet.has(method) && liveGrant?.scope === SCOPE.READONLY) {
       return safeErr(id, ERR.FORBIDDEN, 'read-only grant')
     }
 
