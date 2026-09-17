@@ -619,7 +619,8 @@ test('paths: null is everything, a list narrows, and a re-pair keeps what was se
   const dev = await g.grant({ deviceKey: key(), label: 'phone' })
   assert.equal(dev.paths, null, 'a fresh grant sees everything')
   const narrowed = await g.setPaths(dev.deviceKey, [{ root: '/srv/films', rel: 'kids/' }, { root: '/srv/tv', rel: '' }])
-  assert.deepEqual(narrowed.paths, [{ root: '/srv/films', rel: 'kids/' }, { root: '/srv/tv', rel: '' }])
+  // Stored normalised: the trailing separator goes, so 'kids/' and 'kids' are one prefix.
+  assert.deepEqual(narrowed.paths, [{ root: '/srv/films', rel: 'kids' }, { root: '/srv/tv', rel: '' }])
   assert.deepEqual((await g.get(dev.deviceKey)).paths, narrowed.paths, 'persisted')
   // Scanning a guest window again re-grants the same device: what the new grant is
   // silent about survives, and it is silent about paths.
@@ -645,7 +646,7 @@ test('setPersonPaths narrows every device of the person and nobody else', async 
   assert.deepEqual(rows.map((r) => r.deviceKey).sort(), [s1.deviceKey, s2.deviceKey].sort(), 'both live devices, not the revoked one')
   assert.deepEqual((await g.get(s2.deviceKey)).paths, [{ root: '/srv/films', rel: 'kids' }])
   assert.equal((await g.get(a1.deviceKey)).paths, null, 'Alex is untouched')
-  assert.deepEqual(await g.setPersonPaths('nobody', null), [], 'an unknown person changes nothing')
+  await assert.rejects(g.setPersonPaths('nobody', null), /no such person/, 'an unknown person is an error, not a silent no-op')
   const back = await g.setPersonPaths(sam.id, null)
   assert.equal(back.length, 2)
   assert.equal((await g.get(s1.deviceKey)).paths, null, 'and null widens back to everything')

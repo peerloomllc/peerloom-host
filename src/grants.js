@@ -66,13 +66,20 @@ function personLabels (persons) {
 // A paths value is null (everything) or a non-empty list of { root, rel } strings. Anything
 // else - an empty list, a string, junk entries - is refused loudly rather than stored as
 // something the visibility check might read as "nothing" or "everything" by accident.
+// The root is trimmed and the rel normalised to forward slashes with no leading or
+// trailing separator, so 'kids', 'kids/', '/kids/' and 'kids\\' store as one prefix
+// (PearTune's rule, host/visibility.js, which both apps' `under()` also applies).
+function normalRel (rel) {
+  return String(rel || '').replace(/\\/g, '/').replace(/^\/+|\/+$/g, '')
+}
+
 function normalisePaths (paths) {
   if (paths === null || paths === undefined) return null
-  if (!Array.isArray(paths) || paths.length === 0) throw new Error('paths must be null or a non-empty list')
+  if (!Array.isArray(paths) || paths.length === 0) throw new Error('paths must be null (everything) or a non-empty list')
   return paths.map((p) => {
-    if (!p || typeof p.root !== 'string' || !p.root) throw new Error('every path names its root')
-    const rel = typeof p.rel === 'string' ? p.rel.replace(/^[\\/]+/, '') : ''
-    return { root: p.root, rel }
+    const root = typeof p?.root === 'string' ? p.root.trim() : ''
+    if (!root) throw new Error('each path needs the root it is anchored to')
+    return { root, rel: normalRel(p?.rel) }
   })
 }
 
@@ -125,7 +132,7 @@ class Grants {
   // name afterwards, over the media channel. They are parameters only so a device returning
   // to its own person (proposal 2026-07-21-person-carryover-on-repair) comes back with the
   // claim it already had, rather than reading as assigned-but-unclaimed on the dashboard.
-  async grant ({ deviceKey, personId = null, label = '', platform = '', scope = SCOPE.FULL, grantedBy = 'operator', expiresAt = null, paths = undefined, claimedUser = null, claimedAt = null }) {
+  async grant ({ deviceKey, personId = null, label = '', platform = '', scope = SCOPE.FULL, grantedBy = 'operator', expiresAt = null, paths = undefined, claimedUser = null, claimedAt = null, confirmedUser = undefined }) {
     const key = Grants.keyOf(deviceKey)
     // RE-GRANTING AN ALREADY-KNOWN DEVICE MUST NOT AMNESIA IT. An owner
     // promotion or a guest extension is a re-pair, and the fresh row used to
@@ -155,8 +162,10 @@ class Grants {
       claimedUser: claimedUser ?? keep?.claimedUser ?? null,
       claimedAt: claimedAt ?? keep?.claimedAt ?? null,
       // Survives a re-pair like the claim it belongs to: promoting a phone to owner
-      // must not make it read as unconfirmed.
-      confirmedUser: keep?.confirmedUser ?? null,
+      // must not make it read as unconfirmed. A caller that knows better (a device
+      // pairing back after it left, whose old row is revoked so `keep` is null)
+      // passes it explicitly.
+      confirmedUser: confirmedUser !== undefined ? confirmedUser : (keep?.confirmedUser ?? null),
       revokedAt: null,
       lastSeenAt: keep?.lastSeenAt ?? null
     }
@@ -192,13 +201,17 @@ class Grants {
   }
 
   // The same, for every live device of a person at once. Returns the rows changed.
+  // An unknown person is an error, not "0 changed": the dashboard would otherwise
+  // report success for a save that narrowed nobody.
   async setPersonPaths (personId, paths) {
+    const clean = normalisePaths(paths)
     const person = await this.getPerson(personId)
-    if (!person || person.revokedAt) return []
+    if (!person) throw new Error('no such person')
+    if (person.revokedAt) return []
     const out = []
     for (const row of await this.list()) {
       if (row.personId !== personId || row.revokedAt) continue
-      row.paths = normalisePaths(paths)
+      row.paths = clean
       await this.bee.put('grant:' + row.deviceKey, row, { valueEncoding: 'json' })
       out.push(row)
     }
@@ -379,6 +392,16 @@ class Grants {
     }
 
     row.personId = personId || null
+    if (personId) {
+      // JOINING A NARROWED PERSON MEANS SEEING WHAT THEY SEE. The narrowing lives
+      // per grant (the gate never joins across rows), so without this copy a device
+      // moved under a narrowed person would keep its own null and see everything -
+      // an assignment that silently WIDENS is the hole, not the inconvenience.
+      const sibling = (await this.list()).find(
+        (g) => g.personId === personId && !g.revokedAt && Grants.keyOf(g.deviceKey) !== key
+      )
+      row.paths = sibling ? (sibling.paths ?? null) : (row.paths ?? null)
+    }
     await this.bee.put('grant:' + key, row, { valueEncoding: 'json' })
     return row
   }

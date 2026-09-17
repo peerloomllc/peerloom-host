@@ -202,6 +202,53 @@ class UserState {
     return rows.slice(0, Math.max(1, Number(limit) || 50))
   }
 
+  // PearTune's name for the same list, with its larger default: its Books view's
+  // Continue listening row asks with no limit and shows up to 200.
+  async listResumes (ownerId, limit = 200) {
+    return this.listResume(ownerId, limit)
+  }
+
+  // --- bookmarks --------------------------------------------------------------
+  //
+  // bookmark:{ownerId}:{itemId}:{id} -> { id, <idField>, positionMs, note, createdAt, deviceKey }.
+  // The id is minted by the DEVICE, so a bookmark made offline and removed before its
+  // add ever reached the host is still one well-defined row: the remove lands on the
+  // same key. From PearTune (its proposal 2026-09-13, slice 4); the key and row shape
+  // are what PearTune hosts already hold on disk.
+
+  async addBookmark (ownerId, input, { deviceKey = null } = {}) {
+    const itemId = String(input[this.idField] ?? input.itemId)
+    const row = {
+      id: String(input.id),
+      [this.idField]: itemId,
+      positionMs: Math.max(0, Math.round(Number(input.positionMs) || 0)),
+      note: String(input.note || '').slice(0, 500),
+      createdAt: Number(input.createdAt) || Date.now(),
+      deviceKey
+    }
+    await this.bee.put(`bookmark:${ownerId}:${itemId}:${row.id}`, row, { valueEncoding: 'json' })
+    return row
+  }
+
+  async removeBookmark (ownerId, itemId, id) {
+    await this.bee.del(`bookmark:${ownerId}:${itemId}:${id}`)
+  }
+
+  // This person's bookmarks in the given items, in position order per item. One range
+  // scan per item, so a book in 40 parts is 40 small scans rather than one of everything.
+  async listBookmarks (ownerId, itemIds = []) {
+    const out = []
+    for (const itemId of itemIds) {
+      const lo = `bookmark:${ownerId}:${itemId}:`
+      const hi = `bookmark:${ownerId}:${itemId};`
+      for await (const node of this.bee.createReadStream({ gte: lo, lt: hi }, { valueEncoding: 'json' })) {
+        if (node.value) out.push(node.value)
+      }
+    }
+    const f = this.idField
+    return out.sort((a, b) => (a[f] === b[f] ? a.positionMs - b.positionMs : 0))
+  }
+
   // --- watched ---------------------------------------------------------------
   //
   // watched:{ownerId}:{id} -> { <idField>, on, at, auto }
@@ -642,7 +689,7 @@ class UserState {
     // `watched` is in this list and must stay in it. Deleting a person while leaving
     // behind what they had seen is the exact leak this method was written for - the
     // button says delete, and a stranded row is both a slow leak and a privacy wart.
-    for (const prefix of ['fav', 'resume', 'watched', 'count', 'playlist']) {
+    for (const prefix of ['fav', 'resume', 'watched', 'count', 'playlist', 'bookmark']) {
       const lo = `${prefix}:${ownerId}:`
       const hi = `${prefix}:${ownerId};`
       for await (const node of this.bee.createReadStream({ gte: lo, lt: hi })) keys.push(node.key)

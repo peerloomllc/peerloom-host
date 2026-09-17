@@ -86,6 +86,12 @@ function serveMedia ({
   // a device is playing.
   onStream = null,
 
+  // async (ctx) => body. Replaces the built-in ping answer, for an app whose clients
+  // read more from it than the liveness fields - PearTune's phones read `caps`
+  // (what this host can do, e.g. seek by time offset) and expect exactly the body
+  // PearTune hosts have always sent. Absent is the built-in answer.
+  ping = null,
+
   presence = null,
   log = () => {}
 }) {
@@ -290,7 +296,7 @@ function serveMedia ({
     // Built in, because both ends need a liveness probe that exists before any app
     // has registered anything.
     if (method === 'ping') {
-      return ctx.reply({ protocol: 1, libraryId, app: protocol.app })
+      return ctx.reply(ping ? await ping(ctx) : { protocol: 1, libraryId, app: protocol.app })
     }
 
     if (method === 'media.stream') {

@@ -83,6 +83,8 @@ module.exports = {
   requireSafeBind: dashboardAuth.requireSafeBind,
   resolveDashboardPassword: dashboardAuth.resolveDashboardPassword,
   generatePassword: dashboardAuth.generatePassword,
+  PASSWORD_FILE: dashboardAuth.PASSWORD_FILE,
+  tighten: identity.tighten,
 
   pruneRocksLogs: logprune.pruneRocksLogs,
 

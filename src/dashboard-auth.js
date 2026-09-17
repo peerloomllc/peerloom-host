@@ -21,6 +21,7 @@ const crypto = require('crypto')
 const fs = require('fs')
 const path = require('path')
 const z32 = require('z32')
+const { tighten } = require('./identity')
 
 
 const MAX_FAILURES = 5
@@ -219,7 +220,13 @@ function resolveDashboardPassword ({ password, bind, dataDir }) {
   const file = path.join(dataDir, PASSWORD_FILE)
   try {
     const saved = fs.readFileSync(file, 'utf8').trim()
-    if (saved) return { password: saved, source: 'file' }
+    if (saved) {
+      // Tightened on READ too, not only at the write below: a password file restored
+      // from a backup arrives with whatever mode it has, and this one opens the revoke
+      // button. Same rule as host.seed (identity.js tighten).
+      tighten(file)
+      return { password: saved, source: 'file' }
+    }
   } catch {}
 
   const minted = generatePassword()
