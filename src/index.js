@@ -34,6 +34,7 @@ module.exports = {
   // KEEP one. Shipping only the first is the bug gate.js exists to prevent.
   decide: gate.decide,
   sweepKills: gate.sweepKills,
+  FarewellBook: gate.FarewellBook,
   carryOverPerson: gate.carryOverPerson,
   Connections: gate.Connections,
 

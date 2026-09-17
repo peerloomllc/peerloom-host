@@ -42,7 +42,7 @@ const z32 = require('z32')
 const { createIdentity } = require('./identity')
 const { Grants, confirmedClaim, normalisePaths } = require('./grants')
 const { UserState } = require('./state')
-const { decide, mayBeToldWhy, sweepKills, Connections } = require('./gate')
+const { decide, mayBeToldWhy, sweepKills, Connections, FarewellBook } = require('./gate')
 const { Presence, notifyOwners } = require('./presence')
 const { PairSession, tokenEquals } = require('./pair')
 const { serveMedia, serveFarewell } = require('./media')
@@ -175,7 +175,7 @@ class LibraryHost {
 
     this.connections = new Connections()
     // Who has been told their grant is gone, and when - see _shouldSayFarewell.
-    this._farewellAt = new Map()
+    this._farewells = new FarewellBook({ everyMs: FAREWELL_EVERY_MS, capacity: FAREWELL_MEMORY })
     this._farewellReasons = new Map()
 
     // The registry that lets a request on one device's connection push to another
@@ -361,17 +361,17 @@ class LibraryHost {
   // could otherwise mint keys and fill it.
   _shouldSayFarewell (remotePublicKey) {
     const key = z32.encode(remotePublicKey)
-    const now = Date.now()
-    const last = this._farewellAt.get(key) || 0
-    if (now - last < FAREWELL_EVERY_MS) return false
-    if (this._farewellAt.size >= FAREWELL_MEMORY) {
-      const oldest = this._farewellAt.keys().next().value
-      this._farewellAt.delete(oldest)
-      this._farewellReasons.delete(oldest)
+    if (!this._farewells.shouldSay(key)) return false
+    // The reasons map follows the book: a key the book evicted will never collect its
+    // reason, so it must not stay here forever either.
+    if (this._farewellReasons.size > FAREWELL_MEMORY) {
+      for (const k of this._farewellReasons.keys()) {
+        if (!this._farewells.at.has(k)) this._farewellReasons.delete(k)
+      }
     }
-    this._farewellAt.set(key, now)
     return true
   }
+
 
   // SYNCHRONOUS on purpose, and it registers Protomux `pair` handlers rather than
   // creating channels directly.

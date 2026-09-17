@@ -46,6 +46,31 @@ function mayBeToldWhy (reason) {
   return FAREWELL_REASONS.has(reason)
 }
 
+// One goodbye per key per interval, in a book that cannot grow without bound - a peer
+// could otherwise mint keys and fill it. Pure of I/O (the caller passes `now`), so the
+// rate limit is unit-testable without a server or a clock.
+class FarewellBook {
+  constructor ({ everyMs = 60_000, capacity = 256 } = {}) {
+    this.everyMs = everyMs
+    this.capacity = capacity
+    this.at = new Map() // z32 deviceKey -> when the last goodbye was granted
+  }
+
+  // May this key be told right now? Saying yes RECORDS the goodbye, so asking is
+  // spending - the caller must actually deliver it.
+  shouldSay (key, now = Date.now()) {
+    const last = this.at.get(key) || 0
+    if (now - last < this.everyMs) return false
+    if (this.at.size >= this.capacity && !this.at.has(key)) {
+      const oldest = this.at.keys().next().value
+      this.at.delete(oldest)
+    }
+    this.at.delete(key) // re-insert so Map order stays oldest-first
+    this.at.set(key, now)
+    return true
+  }
+}
+
 // Which of the currently-LIVE devices should be cut right now? Pure, so the sweep's
 // selection is unit-testable without a DHT or a clock. `lookups` maps deviceKey ->
 // { grant, person }; the caller (the host) loads them, then kills what this returns.
@@ -150,4 +175,4 @@ class Connections {
   }
 }
 
-module.exports = { decide, mayBeToldWhy, sweepKills, carryOverPerson, Connections }
+module.exports = { decide, mayBeToldWhy, sweepKills, carryOverPerson, Connections, FarewellBook }
