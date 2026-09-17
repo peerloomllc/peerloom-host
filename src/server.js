@@ -40,13 +40,14 @@ const b4a = require('b4a')
 const z32 = require('z32')
 
 const { createIdentity } = require('./identity')
-const { Grants, confirmedClaim } = require('./grants')
+const { Grants, confirmedClaim, normalisePaths } = require('./grants')
 const { UserState } = require('./state')
 const { decide, mayBeToldWhy, sweepKills, Connections } = require('./gate')
 const { Presence, notifyOwners } = require('./presence')
-const { PairSession } = require('./pair')
+const { PairSession, tokenEquals } = require('./pair')
 const { serveMedia, serveFarewell } = require('./media')
 const { pruneRocksLogs } = require('./logprune')
+const { SCOPE } = require('./protocol/constants')
 
 // How often to sweep live connections for an expired guest grant. `decide()` covers
 // connect; this covers a guest that expires WHILE connected. 30s is fine for a
@@ -452,6 +453,7 @@ class LibraryHost {
         mutating: app.mutating || [],
         openStream: app.openStream || null,
         onStream: app.onStream || null,
+        ping: app.ping || null,
         log: (msg, data) => this.log(msg, { device: short, ...data })
       })
 
@@ -464,7 +466,8 @@ class LibraryHost {
         set.add(handle)
         conn.once('close', () => {
           set.delete(handle)
-          if (set.size === 0) this._mediaHandles.delete(dk)
+          // Only drop the entry if it is still THIS set: a reconnect may have replaced it.
+          if (set.size === 0 && this._mediaHandles.get(dk) === set) this._mediaHandles.delete(dk)
         })
       }
     })
@@ -480,8 +483,12 @@ class LibraryHost {
   // owner.pairStart method migrate without a call-site change.
   startPairing ({ expiresMs = null, owner = false, paths = undefined } = {}) {
     // Owner XOR guest: an owner window ignores any expiry (an owner is permanent by
-    // definition; a time-limited owner would be a footgun).
-    if (owner) expiresMs = null
+    // definition; a time-limited owner would be a footgun). An owner window names no
+    // paths either: an owner is never filtered, so a narrowing here would only record a
+    // lie, and it would rewrite the paths of an already-paired device that scans it.
+    if (owner) { expiresMs = null; paths = undefined }
+    // Fail at the OPEN, not at the scan: a malformed narrowing should never show a QR.
+    if (paths !== undefined) paths = normalisePaths(paths)
 
     // A window is already open. Reuse it only if its KIND (guest-ness AND
     // owner-ness) matches what was asked; otherwise close it and open the requested
@@ -489,8 +496,11 @@ class LibraryHost {
     if (this.pairing) {
       const openMs = this.pairSession.expiresMs || null
       // The narrowing is part of a window's kind: a window opened for the whole library
-      // must not be handed back to somebody asking for a narrowed one.
-      const samePaths = JSON.stringify(this.pairSession.paths ?? null) === JSON.stringify(paths ?? null)
+      // must not be handed back to somebody asking for a narrowed one. undefined ("say
+      // nothing") and null ("everything") are different kinds too: only null rewrites
+      // an already-paired device.
+      const kindOf = (v) => v === undefined ? 'unset' : JSON.stringify(v)
+      const samePaths = kindOf(this.pairSession.paths) === kindOf(paths)
       const sameKind = (openMs ? 1 : 0) === (expiresMs ? 1 : 0) && !!this.pairSession.owner === !!owner && samePaths
       if (sameKind) return this.pairSession.link
       this.pairSession.close('operator')
@@ -512,6 +522,38 @@ class LibraryHost {
 
     this.log('pair:open', { ttlMs: this.pairSession.ttl, guest: !!this.pairSession.expiresMs, owner: !!owner, narrowed: Array.isArray(paths) ? paths.length : null })
     return this.pairSession.link
+  }
+
+  // Swap a stored grant row into every live media handle of its device, so a change
+  // is true on open connections now rather than at their next reconnect. Returns how
+  // many connections took it.
+  refreshGrant (row) {
+    if (!row) return 0
+    let n = 0
+    for (const h of this._mediaHandles.get(row.deviceKey) || []) {
+      if (h.setGrant(row)) n++
+    }
+    return n
+  }
+
+  // A CONNECTED device promotes itself to owner with the open owner window's code.
+  // Same proof as scanning the owner QR (you saw the dashboard's code), no new secret,
+  // and it consumes the window one-shot like a pair. `deviceKey` must be the
+  // connection's Noise-authenticated key (ctx.deviceKey in a media method), so a
+  // device can only ever promote ITSELF.
+  async claimOwner (deviceKey, code) {
+    const ps = this.pairSession
+    if (!ps || ps.closed || !ps.owner) return { ok: false, reason: 'no owner window open' }
+    let rv
+    try { rv = z32.decode(code) } catch { return { ok: false, reason: 'bad code' } }
+    if (!tokenEquals(rv, ps.rv)) return { ok: false, reason: 'code mismatch' }
+    const row = await this.grants.setScope(deviceKey, SCOPE.OWNER)
+    if (!row) return { ok: false, reason: 'no grant' }
+    ps.close('owner-claimed')
+    const refreshed = this.refreshGrant(row)
+    this.log('owner:claimed', { device: Grants.keyOf(deviceKey).slice(0, 8), refreshed })
+    this.notifyOwnersDevicesChanged()
+    return { ok: true }
   }
 
   stopPairing () {
@@ -587,9 +629,7 @@ class LibraryHost {
     let refreshed = 0
     let notified = 0
     for (const row of rows) {
-      for (const h of this._mediaHandles.get(row.deviceKey) || []) {
-        if (h.setGrant(row)) refreshed++
-      }
+      refreshed += this.refreshGrant(row)
       notified += this.presence.notify(row.deviceKey, 'grant:changed', { personId: row.personId || null, paths: row.paths })
     }
     this.log('host:paths-set', { personId, devices: rows.length, narrowed: rows[0] ? rows[0].paths !== null : null, refreshed, notified })
@@ -607,10 +647,7 @@ class LibraryHost {
   async assignDevice (deviceKey, personId) {
     const row = await this.grants.assign(deviceKey, personId)
     if (!row) return { grant: null, refreshed: 0, notified: 0 }
-    let refreshed = 0
-    for (const h of this._mediaHandles.get(row.deviceKey) || []) {
-      if (h.setGrant(row)) refreshed++
-    }
+    const refreshed = this.refreshGrant(row)
     const notified = this.presence.notify(row.deviceKey, 'grant:changed', { personId: row.personId || null })
     this.log('host:assigned', { device: row.deviceKey.slice(0, 8), personId: row.personId || null, refreshed, notified })
     this.notifyOwnersDevicesChanged()
@@ -637,8 +674,14 @@ class LibraryHost {
   async deleteDevice (deviceKey) {
     const row = await this.grants.deleteGrant(deviceKey)
     if (!row) return { deleted: null, killed: 0 }
-    if (this._onDeviceDeleted) await this._onDeviceDeleted(Grants.keyOf(deviceKey))
+    // The kill comes FIRST and the app's cleanup cannot skip it: a hook that throws
+    // (a missing avatar file, a full disk) must never leave a connection half-alive.
     const killed = this.connections.kill(deviceKey)
+    if (this._onDeviceDeleted) {
+      try { await this._onDeviceDeleted(Grants.keyOf(deviceKey)) } catch (e) {
+        this.log('host:device-deleted-hook-failed', { err: e.message })
+      }
+    }
     const silenced = await this._silenceFor(deviceKey)
     this.log('host:device-deleted', { device: Grants.keyOf(deviceKey).slice(0, 8), killed, silenced })
     this.notifyOwnersDevicesChanged()
@@ -699,6 +742,12 @@ class LibraryHost {
     if (this._earlyReannounce) for (const t of this._earlyReannounce) clearTimeout(t)
     if (this._sweep) clearInterval(this._sweep)
     if (this._logPrune) clearInterval(this._logPrune)
+
+    // Withdraw the discovery record so a lookup stops handing out a dead host.
+    // Best-effort: on a crash the record just ages out at its ~20 min TTL.
+    if (this._topic) {
+      try { await this.dht.unannounce(this._topic, this.identity.keyPair) } catch {}
+    }
 
     if (this.server) await this.server.close().catch(() => {})
     await this.bee.close().catch(() => {})

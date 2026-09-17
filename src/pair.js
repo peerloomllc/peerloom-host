@@ -176,6 +176,17 @@ class PairSession {
         const priorPerson = existing?.personId ? await this.grants.getPerson(existing.personId) : null
         const restored = carryOverPerson(existing, priorPerson)
 
+        // What a restored device may see is what its person may see NOW. Its own old
+        // row is a snapshot from when it left, and the person may have been narrowed
+        // since (setPersonPaths skips revoked rows), so a live sibling wins.
+        let restoredPaths = null
+        if (restored) {
+          const sibling = (await this.grants.list()).find(
+            (g) => g.personId === restored && !g.revokedAt && g.deviceKey !== this.grants.constructor.keyOf(remoteKey)
+          )
+          restoredPaths = sibling ? (sibling.paths ?? null) : (existing.paths ?? null)
+        }
+
         await this.grants.grant({
           deviceKey: remoteKey,
           personId: restored,
@@ -189,9 +200,14 @@ class PairSession {
           // claiming nobody (claimMismatch reads these two together).
           claimedUser: restored ? (existing.claimedUser ?? null) : null,
           claimedAt: restored ? (existing.claimedAt ?? null) : null,
-          // undefined here means "whatever the grant already said", which for a device
-          // that has never paired is everything.
-          paths: this.paths
+          // A window that names paths says so for this device too. Otherwise a restored
+          // device gets its person's narrowing: its old row is revoked, so grant() has
+          // nothing to carry over and would hand it everything. A stranger gets
+          // everything, as before.
+          paths: this.paths !== undefined ? this.paths : (restored ? restoredPaths : undefined),
+          // The settled answer travels with the claim, or a self-departed device would
+          // come back reading as pending even though nothing about it changed.
+          confirmedUser: restored ? (existing.confirmedUser ?? null) : null
         })
         this.log('pair:granted', {
           device: z32.encode(remoteKey).slice(0, 8),

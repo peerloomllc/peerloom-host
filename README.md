@@ -56,7 +56,10 @@ const host = new LibraryHost({
       'resume.set': async (ctx) => state.setResume(ctx.owner, ctx.params)
     },
     mutating: ['resume.set'],
-    openStream: async (params) => adapter.stream(params)
+    openStream: async (params) => adapter.stream(params),
+    // Optional. Replaces the built-in ping body, for clients that read more from it
+    // (PearTune's phones read `caps`).
+    ping: async (ctx) => ({ protocol: 1, libraryId: ctx.libraryId, caps: {} })
   }),
   // A cast target is NOT a HyperDHT connection, so connections.kill() cannot reach
   // it. Revoke calls this to actively stop the device.
@@ -160,10 +163,12 @@ Still in PearTune, to follow:
   so it lives here and is tested once; the PAGE is per-app copy and branding, so it
   stays with the app. PearTune keeps its own login-page and XSS tests alongside it.
 
-**PearTune has not migrated yet, by design.** Option C in the proposal: the
-package is proven by a real second consumer before the shipped app moves onto it,
-and PearTune's migration merges only after the iOS 1.0.0 App Review outcome is
-known. `test/brand-compat.test.js` is the standing guarantee that the migration
+**PearTune is migrating** (started 2026-09-17, plan in
+`../proposals/2026-09-17-peartune-host-migration-plan.md`). The iOS 1.0.0 outcome
+that option C waited on is known. The first step brought back what PearTune's own
+host did that this package did not: three ways a narrowed person's device ended up
+seeing everything, bookmarks, owner claim, unannounce on close and 0600-on-read for
+secrets. `test/peartune-parity.test.js` pins each one. `test/brand-compat.test.js` is the standing guarantee that the migration
 stays mechanical - it pins PearTune's protocol strings and id preimages as
 literals, because a refactor that broke them would throw nothing, start fine, and
 simply orphan every phone in the field.

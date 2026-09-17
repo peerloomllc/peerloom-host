@@ -68,12 +68,13 @@ drift is `ADDON_NOT_FOUND` at launch.
 iOS, no trap. Stated in `package.json` too, so nobody cargo-cults it in - and so
 nobody assumes it is safe when a future phone-side extraction happens.
 
-## PearTune has not migrated
+## PearTune is migrating
 
-Option C from the proposal, deliberately: PearCinema proves the package as a real
-second consumer first, and PearTune's migration merges only after the iOS 1.0.0
-App Review outcome is known. So `peartune/host/` and `peartune/protocol/` still
-hold the originals and are still what ships.
+Option C from the proposal: PearCinema proved the package first, and the iOS 1.0.0
+outcome is known, so PearTune's move started 2026-09-17
+(`../proposals/2026-09-17-peartune-host-migration-plan.md`). Until it merges,
+`peartune/host/` and `peartune/protocol/` still hold the originals and are still
+what ships.
 
 That means a fix made here is **not** a fix made in PearTune. Until the migration
 lands, a security fix has to be applied in both places, and the drift window is
