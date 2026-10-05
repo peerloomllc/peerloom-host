@@ -194,6 +194,16 @@ and never thrown. An apply refuses without a `.sha256` sidecar, deletes a file
 whose digest does not match, refuses an installer older than the release tag and
 on macOS refuses a bundle signed by any team other than `mac.teamId`.
 
+The download goes into a `<slug>-update-*` folder in the temp folder, removed
+once the update is installed or has failed. A Windows installer still reads its
+file after the app quits, so that folder stays until the next `UpdateApplier`
+is made, which clears any such folder over an hour old
+(`clearUpdateDownloads`).
+
+An AppImage cannot use Electron's `app.relaunch()`: it runs from a mount that is
+gone once the app exits. PearSheet's `desktop/updates.js` starts the new file
+from a shell outside the mount instead.
+
 `test/update-configs.js` holds the PearSheet config and PearTune's equivalent.
 
 ## Status

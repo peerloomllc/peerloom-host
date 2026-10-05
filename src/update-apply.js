@@ -373,8 +373,12 @@ function defaultExec (argv) {
 // onRelaunch: called when the app must restart itself from the new files.
 // onQuit: called when the app must exit so a Windows installer can replace it.
 class UpdateApplier {
-  constructor ({ config, getUpdate, platform = process.platform, arch = process.arch, target = process.env.APPIMAGE, execPath = process.execPath, exec = defaultExec, fetchImpl, fsImpl = fs, onRelaunch = null, onQuit = null, log = () => {} } = {}) {
+  constructor ({ config, getUpdate, platform = process.platform, arch = process.arch, target = process.env.APPIMAGE, execPath = process.execPath, exec = defaultExec, fetchImpl, fsImpl = fs, onRelaunch = null, onQuit = null, log = () => {}, tmpDir = os.tmpdir() } = {}) {
     this._config = checkConfig(config)
+    this._tmpDir = tmpDir
+    // A Windows installer still needs its file when the app quits, so those
+    // downloads are cleared on a later start instead.
+    clearUpdateDownloads({ config: this._config, tmpDir })
     this._getUpdate = getUpdate
     this._platform = platform
     this._arch = arch
@@ -406,9 +410,12 @@ class UpdateApplier {
     const manual = { status: 'needs-manual', version: update.latest, htmlUrl: update.htmlUrl || null }
     const config = this._config
 
+    let workDir = null
+    let keepDownload = false
     try {
       const plan = planApply(update, update.assets, { config, platform: this._platform, arch: this._arch, appImage: this._target })
-      const { file, digest } = await downloadAndVerify(plan, { config, fetchImpl: this._fetchImpl })
+      workDir = fs.mkdtempSync(path.join(this._tmpDir, `${config.slug}-update-`))
+      const { file, digest } = await downloadAndVerify(plan, { config, workDir, fetchImpl: this._fetchImpl })
       this._log('update:verified', { version: plan.version, digest: digest.slice(0, 12) })
 
       const supervisor = await detectSupervisor({ config, platform: this._platform, exec: this._exec, fsImpl: this._fs })
@@ -418,6 +425,7 @@ class UpdateApplier {
       const r = await applyUpdate(plan, { config, file, digest, supervisor, target, exec: this._exec, log: this._log })
 
       if (r.needsQuit) {
+        keepDownload = true
         this._state = { status: 'restarting', version: plan.version, via: 'installer' }
         if (this._onQuit) this._onQuit()
       } else if (r.needsRelaunch) {
@@ -448,8 +456,30 @@ class UpdateApplier {
         : { status: 'error', version: update.latest, error: e.message, htmlUrl: update.htmlUrl || null }
       this._log('update:apply-failed', { error: e.message })
     }
+    // The download is not needed once installed (or once it failed).
+    if (workDir && !keepDownload) fs.rmSync(workDir, { recursive: true, force: true })
     return this.getState()
   }
+}
+
+// Remove "<slug>-update-*" download folders older than olderThanMs from the
+// temp folder: what a Windows install left behind, or an apply cut short by
+// a crash. Younger ones may belong to an apply still running. Returns how
+// many were removed.
+function clearUpdateDownloads ({ config, tmpDir = os.tmpdir(), olderThanMs = 60 * 60 * 1000, now = Date.now() } = {}) {
+  let removed = 0
+  let names = []
+  try { names = fs.readdirSync(tmpDir) } catch { return 0 }
+  for (const name of names) {
+    if (!name.startsWith(`${config.slug}-update-`)) continue
+    const dir = path.join(tmpDir, name)
+    try {
+      if (now - fs.statSync(dir).mtimeMs < olderThanMs) continue
+      fs.rmSync(dir, { recursive: true, force: true })
+      removed++
+    } catch {}
+  }
+  return removed
 }
 
 module.exports = {
@@ -466,6 +496,7 @@ module.exports = {
   APPLIERS,
   applyUpdate,
   UpdateApplier,
+  clearUpdateDownloads,
   defaultExec,
   VerifyError,
   NeedsManualError
