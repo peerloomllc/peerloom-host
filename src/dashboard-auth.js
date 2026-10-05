@@ -21,7 +21,7 @@ const crypto = require('crypto')
 const fs = require('fs')
 const path = require('path')
 const z32 = require('z32')
-const { tighten } = require('./identity')
+const { tighten } = require('./tighten')
 
 
 const MAX_FAILURES = 5
