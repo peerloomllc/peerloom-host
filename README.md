@@ -33,6 +33,7 @@ unchanged?**
 | `presence` | Live push senders per device, so the host can speak first. |
 | `dashboard-auth` | The LOCK on the control plane: password gate, sessions, rate limiting, fail-closed bind check. Per-app session cookie. |
 | `logprune` | Operator daemon plumbing. |
+| `update-check`, `update-apply` | "A new version is out" and "Update now" for desktop apps, driven by a per-app config. |
 | `framing` | compact-encoding message shapes. |
 
 A method table does **not** pass the test. The method table IS the app: audio
@@ -137,6 +138,64 @@ addons because iOS links them by exact framework version and any drift is
 `ADDON_NOT_FOUND` at launch. This package runs in Node on a server, not in a Bare
 worklet on a phone. No iOS, no trap.
 
+## Update check and apply
+
+`update-check` asks GitHub whether a newer release exists. `update-apply`
+downloads this machine's artifact, checks it against its `.sha256` sidecar and
+installs it. Both use Node built-ins only (and each other), so an app that does
+not want the whole package can copy just these two files.
+
+Everything app-specific is one config object:
+
+```js
+const config = {
+  name: 'PearSheet',            // for messages
+  slug: 'pearsheet',            // user agent "<slug>/<version>", temp dir "<slug>-update-"
+  repo: 'peerloomllc/pearsheet-releases',
+  envPrefix: 'PEARSHEET',       // <PREFIX>_NO_UPDATE_CHECK, <PREFIX>_UPDATE_LATEST_URL, <PREFIX>_VERSION
+  assets: {                     // a RegExp or a function (name) => boolean, tested on asset names
+    win32: /^PearSheet-Setup-.*\.exe$/i,
+    darwinArm64: /-mac-arm64\.dmg$/i,
+    darwinX64: /-mac-x64\.dmg$/i,
+    appImage: /\.AppImage$/i,
+    deb: /\.deb$/i
+  },
+  mac: { appBundle: 'PearSheet.app', teamId: 'G79ALD29NA', daemonPlist: null, hostArgv: null },
+  linux: { unit: null, debHelper: null },
+  windows: { service: null, installerArgs: ['/S', '--force-run'] }
+}
+
+const { createUpdateChecker } = require('@peerloom/host/update-check')
+const { UpdateApplier } = require('@peerloom/host/update-apply')
+
+const { checker } = createUpdateChecker({ config, currentVersion: app.getVersion(), firstDelayMs: 30000 })
+const applier = new UpdateApplier({
+  config,
+  getUpdate: () => checker && checker.get(),
+  onRelaunch: () => { app.relaunch(); app.exit(0) },
+  onQuit: () => app.exit(0)
+})
+```
+
+What the optional parts change:
+
+- `linux.unit`, `windows.service`, `mac.daemonPlist` + `mac.hostArgv`: the app
+  runs under a service manager. Leave them null for a plain tray app and no
+  service is looked for.
+- `linux.debHelper`: a root-owned helper plus polkit rule installed by the .deb,
+  which re-checks the digest as root. Null means `pkexec dpkg -i <file>` (the
+  desktop asks for a password), then the app relaunches.
+- `windows.service` null: the installer is started detached and the app quits
+  (`onQuit`) so its files can be replaced.
+
+The check is off inside a container (`/.dockerenv`) or when
+`<PREFIX>_NO_UPDATE_CHECK` is set. It fails open: a GitHub error is recorded
+and never thrown. An apply refuses without a `.sha256` sidecar, deletes a file
+whose digest does not match, refuses an installer older than the release tag and
+on macOS refuses a bundle signed by any team other than `mac.teamId`.
+
+`test/update-configs.js` holds the PearSheet config and PearTune's equivalent.
+
 ## Status
 
 Phases 1 and 2 done. The package can stand up a working host: pair a device, serve
@@ -148,6 +207,8 @@ In the package and tested:
 
 - `createProtocol` and the whole `protocol/` layer
 - `gate`, `grants`, `identity`, `presence`, `pair`, `logprune`
+- `update-check`, `update-apply` (moved from PearTune 2026-10-05, generalised so
+  PearSheet uses them now; PearTune has not switched yet)
 - `serveMedia` - the channel seam
 - `LibraryHost` - the daemon
 
@@ -157,7 +218,6 @@ Still in PearTune, to follow:
   Genuinely shared behaviour wrapped around an app-specific kind vocabulary, so it
   needs the same treatment `ids` got rather than a straight move.
 - `avatars.js` - device photos. Small, and it moves with `state`.
-- `update-check`, `update-apply` - operator daemon plumbing, mechanical.
 - The dashboard PAGE. Open question 3 in the proposal is now answered by splitting
   it rather than choosing a side: the LOCK is shared machinery and security-critical,
   so it lives here and is tested once; the PAGE is per-app copy and branding, so it

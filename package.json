@@ -17,7 +17,9 @@
     "./presence": "./src/presence.js",
     "./pair": "./src/pair.js",
     "./logprune": "./src/logprune.js",
-    "./dashboard-auth": "./src/dashboard-auth.js"
+    "./dashboard-auth": "./src/dashboard-auth.js",
+    "./update-check": "./src/update-check.js",
+    "./update-apply": "./src/update-apply.js"
   },
   "scripts": {
     "test": "node --test test/*.test.js",
