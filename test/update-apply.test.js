@@ -764,3 +764,55 @@ test('defaultExec still carries stdout, which is where systemctl answers', async
 test('defaultExec rejects on a non-zero exit, which is what "no service" and a failed verify look like', async () => {
   await assert.rejects(defaultExec([process.execPath, '-e', 'process.exit(3)']))
 })
+
+// --- the download folder is not left behind -----------------------------------------
+
+const { clearUpdateDownloads } = require('../src/update-apply')
+const downloads = (dir) => fs.readdirSync(dir).filter((n) => n.startsWith(`${config.slug}-update-`))
+
+test('the download folder is removed once the update is installed', async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'plh-dl-'))
+  const { applier } = applierFor({ tmpDir })
+  assert.equal((await applier.apply()).status, 'restarting')
+  assert.deepEqual(downloads(tmpDir), [])
+  fs.rmSync(tmpDir, { recursive: true, force: true })
+})
+
+test('the download folder is removed after a failed verify too', async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'plh-dl-'))
+  const urls = {}
+  for (const a of ASSETS) urls[a.browser_download_url] = a.name.endsWith('.sha256') ? `${'b'.repeat(64)}  x\n` : 'TAMPERED'
+  const r = recorder({ 'systemctl --user is-active': 'active\n' })
+  const applier = new UpdateApplier({ config, getUpdate: () => RELEASE, platform: 'linux', target: '/home/tim/PearTune.AppImage', exec: r.exec, fetchImpl: stubFetch(urls), tmpDir })
+  assert.equal((await applier.apply()).status, 'error')
+  assert.deepEqual(downloads(tmpDir), [])
+  fs.rmSync(tmpDir, { recursive: true, force: true })
+})
+
+test('a Windows installer keeps its file: the app quits while it still runs', async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'plh-dl-'))
+  const { applier } = applierFor({ config: PEARSHEET, platform: 'win32', tmpDir }, { release: SHEET_UPDATE })
+  const s = await applier.apply()
+  assert.equal(s.via, 'installer')
+  assert.equal(downloads(tmpDir).length, 0, 'other slugs untouched')
+  assert.equal(fs.readdirSync(tmpDir).filter((n) => n.startsWith('pearsheet-update-')).length, 1)
+  fs.rmSync(tmpDir, { recursive: true, force: true })
+})
+
+test('old download folders are cleared on the next start, young ones kept', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'plh-dl-'))
+  const old = path.join(tmpDir, `${config.slug}-update-old`)
+  const young = path.join(tmpDir, `${config.slug}-update-young`)
+  const other = path.join(tmpDir, 'something-else-update-x')
+  for (const d of [old, young, other]) fs.mkdirSync(d)
+  const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000)
+  fs.utimesSync(old, twoHoursAgo, twoHoursAgo)
+  fs.utimesSync(other, twoHoursAgo, twoHoursAgo)
+  assert.equal(clearUpdateDownloads({ config, tmpDir }), 1)
+  assert.deepEqual(fs.readdirSync(tmpDir).sort(), [path.basename(other), path.basename(young)].sort())
+  // Starting an applier does the same.
+  fs.utimesSync(young, twoHoursAgo, twoHoursAgo)
+  new UpdateApplier({ config, getUpdate: () => null, tmpDir }) // eslint-disable-line no-new
+  assert.deepEqual(fs.readdirSync(tmpDir), [path.basename(other)])
+  fs.rmSync(tmpDir, { recursive: true, force: true })
+})
