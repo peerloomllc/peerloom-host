@@ -2,21 +2,21 @@
 
 // The two app configs the update tests run against. PEARTUNE mirrors what PearTune
 // hard-coded before it moved here, to prove it can migrate without behaviour change.
-// PEARSHEET is the first app written against the shared version.
+// PEAROFFICE is the first app written against the shared version.
 
-const PEARSHEET = {
-  name: 'PearSheet',
-  slug: 'pearsheet',
-  repo: 'peerloomllc/pearsheet-releases',
-  envPrefix: 'PEARSHEET',
+const PEAROFFICE = {
+  name: 'PearOffice',
+  slug: 'pearoffice',
+  repo: 'peerloomllc/pearoffice-releases',
+  envPrefix: 'PEAROFFICE',
   assets: {
-    win32: /^PearSheet-Setup-.*\.exe$/i,
+    win32: /^PearOffice-Setup-.*\.exe$/i,
     darwinArm64: /-mac-arm64\.dmg$/i,
     darwinX64: /-mac-x64\.dmg$/i,
     appImage: /\.AppImage$/i,
     deb: /\.deb$/i
   },
-  mac: { appBundle: 'PearSheet.app', teamId: 'G79ALD29NA', daemonPlist: null, hostArgv: null },
+  mac: { appBundle: 'PearOffice.app', teamId: 'G79ALD29NA', daemonPlist: null, hostArgv: null },
   linux: { unit: null, debHelper: null },
   windows: { service: null, installerArgs: ['/S', '--force-run'] }
 }
@@ -44,4 +44,4 @@ const PEARTUNE = {
   windows: { service: 'PearTuneHost', installerArgs: ['/S'] }
 }
 
-module.exports = { PEARSHEET, PEARTUNE }
+module.exports = { PEAROFFICE, PEARTUNE }

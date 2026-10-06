@@ -149,18 +149,18 @@ Everything app-specific is one config object:
 
 ```js
 const config = {
-  name: 'PearSheet',            // for messages
-  slug: 'pearsheet',            // user agent "<slug>/<version>", temp dir "<slug>-update-"
-  repo: 'peerloomllc/pearsheet-releases',
-  envPrefix: 'PEARSHEET',       // <PREFIX>_NO_UPDATE_CHECK, <PREFIX>_UPDATE_LATEST_URL, <PREFIX>_VERSION
+  name: 'PearOffice',            // for messages
+  slug: 'pearoffice',            // user agent "<slug>/<version>", temp dir "<slug>-update-"
+  repo: 'peerloomllc/pearoffice-releases',
+  envPrefix: 'PEAROFFICE',       // <PREFIX>_NO_UPDATE_CHECK, <PREFIX>_UPDATE_LATEST_URL, <PREFIX>_VERSION
   assets: {                     // a RegExp or a function (name) => boolean, tested on asset names
-    win32: /^PearSheet-Setup-.*\.exe$/i,
+    win32: /^PearOffice-Setup-.*\.exe$/i,
     darwinArm64: /-mac-arm64\.dmg$/i,
     darwinX64: /-mac-x64\.dmg$/i,
     appImage: /\.AppImage$/i,
     deb: /\.deb$/i
   },
-  mac: { appBundle: 'PearSheet.app', teamId: 'G79ALD29NA', daemonPlist: null, hostArgv: null },
+  mac: { appBundle: 'PearOffice.app', teamId: 'G79ALD29NA', daemonPlist: null, hostArgv: null },
   linux: { unit: null, debHelper: null },
   windows: { service: null, installerArgs: ['/S', '--force-run'] }
 }
@@ -201,10 +201,10 @@ is made, which clears any such folder over an hour old
 (`clearUpdateDownloads`).
 
 An AppImage cannot use Electron's `app.relaunch()`: it runs from a mount that is
-gone once the app exits. PearSheet's `desktop/updates.js` starts the new file
+gone once the app exits. PearOffice's `desktop/updates.js` starts the new file
 from a shell outside the mount instead.
 
-`test/update-configs.js` holds the PearSheet config and PearTune's equivalent.
+`test/update-configs.js` holds the PearOffice config and PearTune's equivalent.
 
 ## Status
 
@@ -218,7 +218,7 @@ In the package and tested:
 - `createProtocol` and the whole `protocol/` layer
 - `gate`, `grants`, `identity`, `presence`, `pair`, `logprune`
 - `update-check`, `update-apply` (moved from PearTune 2026-10-05, generalised so
-  PearSheet uses them now; PearTune has not switched yet)
+  PearOffice uses them now; PearTune has not switched yet)
 - `serveMedia` - the channel seam
 - `LibraryHost` - the daemon
 

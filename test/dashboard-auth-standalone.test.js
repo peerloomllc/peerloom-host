@@ -1,4 +1,4 @@
-// dashboard-auth must load without identity.js or hyperdht: PearSheet's seeder
+// dashboard-auth must load without identity.js or hyperdht: PearOffice's seeder
 // dashboard ships it on its own in a small image.
 const test = require('node:test')
 const assert = require('node:assert/strict')

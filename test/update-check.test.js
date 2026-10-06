@@ -10,7 +10,7 @@ const {
   UpdateChecker, evaluateRelease, isNewer, compareVersions, parseVersion, updatesDisabled,
   appVersion, createUpdateChecker, DEFAULT_INTERVAL_MS
 } = require('../src/update-check')
-const { PEARSHEET, PEARTUNE } = require('./update-configs')
+const { PEAROFFICE, PEARTUNE } = require('./update-configs')
 
 const config = PEARTUNE
 const noFs = { existsSync: () => false }
@@ -129,7 +129,7 @@ test('the default version lookup is relative to the app, not to this package', (
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'uc-ver-'))
   fs.mkdirSync(path.join(root, 'app', 'main'), { recursive: true })
   fs.writeFileSync(path.join(root, 'app', 'package.json'), JSON.stringify({ version: '7.8.9' }))
-  assert.equal(appVersion({ config: PEARSHEET, env: {}, baseDir: path.join(root, 'app', 'main') }), '7.8.9')
+  assert.equal(appVersion({ config: PEAROFFICE, env: {}, baseDir: path.join(root, 'app', 'main') }), '7.8.9')
   fs.rmSync(root, { recursive: true, force: true })
 })
 
@@ -158,64 +158,64 @@ test('a missing config is a programming error, thrown at once', () => {
   assert.throws(() => evaluateRelease({ tag_name: 'v1.0.0' }, '1.0.0'), TypeError)
 })
 
-// --- PearSheet ------------------------------------------------------------------
+// --- PearOffice ------------------------------------------------------------------
 
-test('PearSheet reads its own env prefix and ignores another app\'s', () => {
-  assert.deepEqual(updatesDisabled({ config: PEARSHEET, env: { PEARSHEET_NO_UPDATE_CHECK: '1' }, fs: noFs }), { disabled: true, reason: 'PEARSHEET_NO_UPDATE_CHECK' })
-  assert.deepEqual(updatesDisabled({ config: PEARSHEET, env: { PEARTUNE_NO_UPDATE_CHECK: '1' }, fs: noFs }), { disabled: false, reason: null })
-  assert.equal(appVersion({ config: PEARSHEET, env: { PEARSHEET_VERSION: '0.2.0', PEARTUNE_VERSION: '9.9.9' } }), '0.2.0')
-  assert.equal(appVersion({ config: PEARSHEET, env: { PEARTUNE_VERSION: '9.9.9' }, load: () => { throw new Error('none') } }), null)
-  const r = createUpdateChecker({ config: PEARSHEET, env: { PEARSHEET_NO_UPDATE_CHECK: '1' } })
+test('PearOffice reads its own env prefix and ignores another app\'s', () => {
+  assert.deepEqual(updatesDisabled({ config: PEAROFFICE, env: { PEAROFFICE_NO_UPDATE_CHECK: '1' }, fs: noFs }), { disabled: true, reason: 'PEAROFFICE_NO_UPDATE_CHECK' })
+  assert.deepEqual(updatesDisabled({ config: PEAROFFICE, env: { PEARTUNE_NO_UPDATE_CHECK: '1' }, fs: noFs }), { disabled: false, reason: null })
+  assert.equal(appVersion({ config: PEAROFFICE, env: { PEAROFFICE_VERSION: '0.2.0', PEARTUNE_VERSION: '9.9.9' } }), '0.2.0')
+  assert.equal(appVersion({ config: PEAROFFICE, env: { PEARTUNE_VERSION: '9.9.9' }, load: () => { throw new Error('none') } }), null)
+  const r = createUpdateChecker({ config: PEAROFFICE, env: { PEAROFFICE_NO_UPDATE_CHECK: '1' } })
   assert.equal(r.checker, null)
-  assert.equal(r.reason, 'PEARSHEET_NO_UPDATE_CHECK')
+  assert.equal(r.reason, 'PEAROFFICE_NO_UPDATE_CHECK')
 })
 
-test('PearSheet asks its own releases repo, or the URL its env var names', async () => {
+test('PearOffice asks its own releases repo, or the URL its env var names', async () => {
   const seen = []
   const fetchImpl = async (url, opts) => { seen.push([url, opts.headers['user-agent']]); return { ok: true, json: async () => ({ tag_name: 'v0.2.0' }) } }
-  await new UpdateChecker({ config: PEARSHEET, currentVersion: '0.1.0', env: {}, fetchImpl }).check()
-  await new UpdateChecker({ config: PEARSHEET, currentVersion: '0.1.0', env: { PEARSHEET_UPDATE_LATEST_URL: 'http://127.0.0.1:1/latest' }, fetchImpl }).check()
-  await new UpdateChecker({ config: PEARSHEET, currentVersion: '0.1.0', env: { PEARTUNE_UPDATE_LATEST_URL: 'http://wrong/' }, fetchImpl }).check()
+  await new UpdateChecker({ config: PEAROFFICE, currentVersion: '0.1.0', env: {}, fetchImpl }).check()
+  await new UpdateChecker({ config: PEAROFFICE, currentVersion: '0.1.0', env: { PEAROFFICE_UPDATE_LATEST_URL: 'http://127.0.0.1:1/latest' }, fetchImpl }).check()
+  await new UpdateChecker({ config: PEAROFFICE, currentVersion: '0.1.0', env: { PEARTUNE_UPDATE_LATEST_URL: 'http://wrong/' }, fetchImpl }).check()
   assert.deepEqual(seen, [
-    ['https://api.github.com/repos/peerloomllc/pearsheet-releases/releases/latest', 'pearsheet/0.1.0'],
-    ['http://127.0.0.1:1/latest', 'pearsheet/0.1.0'],
-    ['https://api.github.com/repos/peerloomllc/pearsheet-releases/releases/latest', 'pearsheet/0.1.0']
+    ['https://api.github.com/repos/peerloomllc/pearoffice-releases/releases/latest', 'pearoffice/0.1.0'],
+    ['http://127.0.0.1:1/latest', 'pearoffice/0.1.0'],
+    ['https://api.github.com/repos/peerloomllc/pearoffice-releases/releases/latest', 'pearoffice/0.1.0']
   ])
 })
 
-test('PearSheet releases are judged against PearSheet asset names', () => {
+test('PearOffice releases are judged against PearOffice asset names', () => {
   const release = (v) => ({
     tag_name: 'v0.2.0',
     assets: [
-      `PearSheet-Setup-${v}.exe`, `PearSheet-${v}-mac-arm64.dmg`, `PearSheet-${v}-mac-x64.dmg`,
-      `pearsheet-${v}-linux-x86_64.AppImage`, `pearsheet-${v}-linux-amd64.deb`,
+      `PearOffice-Setup-${v}.exe`, `PearOffice-${v}-mac-arm64.dmg`, `PearOffice-${v}-mac-x64.dmg`,
+      `pearoffice-${v}-linux-x86_64.AppImage`, `pearoffice-${v}-linux-amd64.deb`,
       // Always the new version, so a stale desktop build cannot hide behind them.
-      'PearSheet-0.2.0-mac-arm64.zip', 'pearsheet-seeder-0.2.0-linux-x64.tar.gz'
+      'PearOffice-0.2.0-mac-arm64.zip', 'pearoffice-seeder-0.2.0-linux-x64.tar.gz'
     ].map(name => ({ name }))
   })
   const platforms = [{ platform: 'win32' }, { platform: 'darwin', arch: 'arm64' }, { platform: 'darwin', arch: 'x64' }, { platform: 'linux', appImage: '/x.AppImage' }, { platform: 'linux', appImage: '' }]
   for (const opts of platforms) {
-    assert.equal(evaluateRelease(release('0.2.0'), '0.1.0', { config: PEARSHEET, ...opts }).available, true, JSON.stringify(opts))
-    assert.equal(evaluateRelease(release('0.1.0'), '0.1.0', { config: PEARSHEET, ...opts }).reason, 'no-build-for-platform', JSON.stringify(opts))
+    assert.equal(evaluateRelease(release('0.2.0'), '0.1.0', { config: PEAROFFICE, ...opts }).available, true, JSON.stringify(opts))
+    assert.equal(evaluateRelease(release('0.1.0'), '0.1.0', { config: PEAROFFICE, ...opts }).reason, 'no-build-for-platform', JSON.stringify(opts))
   }
 })
 
 test('firstDelayMs holds the first check back, and 0 checks at once', async () => {
   let calls = 0
   const fetchImpl = async () => { calls++; return { ok: true, json: async () => ({ tag_name: 'v0.1.0' }) } }
-  const now = new UpdateChecker({ config: PEARSHEET, currentVersion: '0.1.0', env: {}, fetchImpl }).start()
+  const now = new UpdateChecker({ config: PEAROFFICE, currentVersion: '0.1.0', env: {}, fetchImpl }).start()
   assert.equal(calls, 1, 'no delay means the first check starts during start()')
   now.stop()
 
   calls = 0
-  const later = new UpdateChecker({ config: PEARSHEET, currentVersion: '0.1.0', env: {}, fetchImpl, firstDelayMs: 30 }).start()
+  const later = new UpdateChecker({ config: PEAROFFICE, currentVersion: '0.1.0', env: {}, fetchImpl, firstDelayMs: 30 }).start()
   assert.equal(calls, 0, 'nothing may be fetched before the delay')
   await new Promise(resolve => setTimeout(resolve, 80))
   assert.equal(calls, 1)
   later.stop()
 
   calls = 0
-  const stopped = new UpdateChecker({ config: PEARSHEET, currentVersion: '0.1.0', env: {}, fetchImpl, firstDelayMs: 30 }).start()
+  const stopped = new UpdateChecker({ config: PEAROFFICE, currentVersion: '0.1.0', env: {}, fetchImpl, firstDelayMs: 30 }).start()
   stopped.stop()
   await new Promise(resolve => setTimeout(resolve, 80))
   assert.equal(calls, 0, 'stop() before the delay cancels the first check')
