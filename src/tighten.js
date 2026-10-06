@@ -4,7 +4,7 @@
 // where a caller supplies a log, so a failure is visible rather than silent.
 //
 // Its own file so dashboard-auth.js does not pull in identity.js (and hyperdht)
-// for it: PearSheet's seeder dashboard uses dashboard-auth alone.
+// for it: PearOffice's seeder dashboard uses dashboard-auth alone.
 const fs = require('fs')
 const path = require('path')
 

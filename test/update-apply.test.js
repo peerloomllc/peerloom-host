@@ -15,7 +15,7 @@ const {
   parseCodesignTeam, macAppRoot, detectSupervisor, applyUpdate, UpdateApplier, defaultExec,
   VerifyError, NeedsManualError, APPLIERS
 } = require('../src/update-apply')
-const { PEARSHEET, PEARTUNE } = require('./update-configs')
+const { PEAROFFICE, PEARTUNE } = require('./update-configs')
 
 const config = PEARTUNE
 
@@ -157,11 +157,11 @@ test('a missing or unreadable sidecar refuses, it does not skip verification', a
 test('downloads name the app, and the temp folder is named after it', async () => {
   const body = 'bytes'
   const digest = crypto.createHash('sha256').update(body).digest('hex')
-  const plan = { name: 'PearSheet-Setup-0.2.0.exe', url: 'u://a', sha256Url: 'u://a.sha256' }
+  const plan = { name: 'PearOffice-Setup-0.2.0.exe', url: 'u://a', sha256Url: 'u://a.sha256' }
   const seen = []
-  const r = await downloadAndVerify(plan, { config: PEARSHEET, fetchImpl: stubFetch({ 'u://a': body, 'u://a.sha256': digest }, seen) })
-  assert.match(path.basename(r.dir), /^pearsheet-update-/)
-  assert.deepEqual(seen.map(s => s.ua), ['pearsheet', 'pearsheet'])
+  const r = await downloadAndVerify(plan, { config: PEAROFFICE, fetchImpl: stubFetch({ 'u://a': body, 'u://a.sha256': digest }, seen) })
+  assert.match(path.basename(r.dir), /^pearoffice-update-/)
+  assert.deepEqual(seen.map(s => s.ua), ['pearoffice', 'pearoffice'])
   fs.rmSync(r.dir, { recursive: true, force: true })
 })
 
@@ -213,7 +213,7 @@ test('with no service configured, detectSupervisor answers null and runs nothing
   const r = recorder({ 'systemctl --user is-active': 'active\n', 'sc.exe query': 'RUNNING' })
   const fsImpl = { existsSync: () => { throw new Error('must not be asked') } }
   for (const platform of ['linux', 'win32', 'darwin']) {
-    assert.equal(await detectSupervisor({ config: PEARSHEET, platform, exec: r.exec, fsImpl }), null, platform)
+    assert.equal(await detectSupervisor({ config: PEAROFFICE, platform, exec: r.exec, fsImpl }), null, platform)
   }
   assert.deepEqual(r.calls, [], 'no command may run for a service the app does not have')
 })
@@ -269,10 +269,10 @@ test('with no daemon installed, the .dmg swap still just relaunches the tray', a
 test('an app with no daemon configured never kills anything, even if told launchd', async () => {
   const r = recorder({ 'codesign -dv': TEAM_OK })
   const out = await applyUpdate({ applier: 'macapp', version: '0.2.0' }, {
-    config: PEARSHEET, file: '/tmp/x.dmg', target: '/Applications/PearSheet.app', supervisor: 'launchd', mountDir: '/tmp/mnt', exec: r.exec
+    config: PEAROFFICE, file: '/tmp/x.dmg', target: '/Applications/PearOffice.app', supervisor: 'launchd', mountDir: '/tmp/mnt', exec: r.exec
   })
   assert.ok(!r.calls.some((c) => c.startsWith('pkill')))
-  assert.ok(r.calls.includes('codesign --verify --deep --strict /tmp/mnt/PearSheet.app'), 'the bundle name comes from the config')
+  assert.ok(r.calls.includes('codesign --verify --deep --strict /tmp/mnt/PearOffice.app'), 'the bundle name comes from the config')
   assert.deepEqual(out, { restarted: false, needsRelaunch: true, via: 'dmg-swap', applier: 'macapp', version: '0.2.0' })
 })
 
@@ -444,7 +444,7 @@ test('the signing team is read, and "not set" is not a match', () => {
 test('the .app root is derived, never guessed', () => {
   // We mv and rm -rf around this path, so a shape that does not match is null.
   assert.equal(macAppRoot('/Applications/PearTune.app/Contents/MacOS/PearTune'), '/Applications/PearTune.app')
-  assert.equal(macAppRoot('/Users/tim/Desktop/PearSheet.app/Contents/MacOS/PearSheet'), '/Users/tim/Desktop/PearSheet.app')
+  assert.equal(macAppRoot('/Users/tim/Desktop/PearOffice.app/Contents/MacOS/PearOffice'), '/Users/tim/Desktop/PearOffice.app')
   assert.equal(macAppRoot('/usr/local/bin/node'), null, 'an unpackaged dev run must not resolve to a path we would delete')
   assert.equal(macAppRoot(''), null)
 })
@@ -594,67 +594,67 @@ test('no real desktop artifact is ever a phone build', () => {
   }
 })
 
-// --- PearSheet ------------------------------------------------------------------------
+// --- PearOffice ------------------------------------------------------------------------
 
 const SHEET_ASSETS = withSidecars([
-  'PearSheet-Setup-0.2.0.exe',
-  'PearSheet-0.2.0-mac-arm64.dmg',
-  'PearSheet-0.2.0-mac-x64.dmg',
-  'pearsheet-0.2.0-linux-x86_64.AppImage',
-  'pearsheet-0.2.0-linux-amd64.deb',
-  // Real assets on a PearSheet release that no desktop update may ever pick.
-  'PearSheet-0.2.0-mac-arm64.zip',
-  'pearsheet-seeder-0.2.0-linux-x64.tar.gz'
+  'PearOffice-Setup-0.2.0.exe',
+  'PearOffice-0.2.0-mac-arm64.dmg',
+  'PearOffice-0.2.0-mac-x64.dmg',
+  'pearoffice-0.2.0-linux-x86_64.AppImage',
+  'pearoffice-0.2.0-linux-amd64.deb',
+  // Real assets on a PearOffice release that no desktop update may ever pick.
+  'PearOffice-0.2.0-mac-arm64.zip',
+  'pearoffice-seeder-0.2.0-linux-x64.tar.gz'
 ], 'https://github.test')
-const SHEET_UPDATE = { available: true, latest: '0.2.0', current: '0.1.0', htmlUrl: 'https://gh/pearsheet/v0.2.0', assets: SHEET_ASSETS }
+const SHEET_UPDATE = { available: true, latest: '0.2.0', current: '0.1.0', htmlUrl: 'https://gh/pearoffice/v0.2.0', assets: SHEET_ASSETS }
 
-test('PearSheet: each platform picks its own artifact, never the zip or the seeder', () => {
+test('PearOffice: each platform picks its own artifact, never the zip or the seeder', () => {
   const cases = [
-    [{ platform: 'win32', arch: 'x64' }, 'windows', 'PearSheet-Setup-0.2.0.exe'],
-    [{ platform: 'darwin', arch: 'arm64' }, 'macapp', 'PearSheet-0.2.0-mac-arm64.dmg'],
-    [{ platform: 'darwin', arch: 'x64' }, 'macapp', 'PearSheet-0.2.0-mac-x64.dmg'],
-    [{ platform: 'linux', arch: 'x64', appImage: '/home/tim/pearsheet.AppImage' }, 'appimage', 'pearsheet-0.2.0-linux-x86_64.AppImage'],
-    [{ platform: 'linux', arch: 'x64', appImage: '' }, 'deb', 'pearsheet-0.2.0-linux-amd64.deb']
+    [{ platform: 'win32', arch: 'x64' }, 'windows', 'PearOffice-Setup-0.2.0.exe'],
+    [{ platform: 'darwin', arch: 'arm64' }, 'macapp', 'PearOffice-0.2.0-mac-arm64.dmg'],
+    [{ platform: 'darwin', arch: 'x64' }, 'macapp', 'PearOffice-0.2.0-mac-x64.dmg'],
+    [{ platform: 'linux', arch: 'x64', appImage: '/home/tim/pearoffice.AppImage' }, 'appimage', 'pearoffice-0.2.0-linux-x86_64.AppImage'],
+    [{ platform: 'linux', arch: 'x64', appImage: '' }, 'deb', 'pearoffice-0.2.0-linux-amd64.deb']
   ]
   for (const [opts, applier, name] of cases) {
-    const plan = planApply(SHEET_UPDATE, SHEET_ASSETS, { config: PEARSHEET, ...opts })
+    const plan = planApply(SHEET_UPDATE, SHEET_ASSETS, { config: PEAROFFICE, ...opts })
     assert.equal(plan.name, name, `${opts.platform}/${opts.arch}`)
     assert.equal(plan.applier, applier)
     assert.equal(plan.sha256Url, `https://github.test/${name}.sha256`)
     assert.equal(plan.version, '0.2.0')
   }
-  assert.equal(versionInName('pearsheet-0.2.0-linux-x86_64.AppImage'), '0.2.0', 'x86_64 is not a version')
+  assert.equal(versionInName('pearoffice-0.2.0-linux-x86_64.AppImage'), '0.2.0', 'x86_64 is not a version')
 })
 
-test('PearSheet: with only the zip and the seeder left, nothing is picked', () => {
+test('PearOffice: with only the zip and the seeder left, nothing is picked', () => {
   const leftovers = SHEET_ASSETS.filter(a => /\.(zip|tar\.gz)(\.sha256)?$/.test(a.name))
   for (const opts of [{ platform: 'win32' }, { platform: 'darwin', arch: 'arm64' }, { platform: 'darwin', arch: 'x64' }, { platform: 'linux', appImage: '/x.AppImage' }, { platform: 'linux', appImage: '' }]) {
-    assert.equal(selectAsset(leftovers, { config: PEARSHEET, ...opts }), null, JSON.stringify(opts))
+    assert.equal(selectAsset(leftovers, { config: PEAROFFICE, ...opts }), null, JSON.stringify(opts))
   }
 })
 
-test('PearSheet: a PearTune release is never picked up by PearSheet', () => {
+test('PearOffice: a PearTune release is never picked up by PearOffice', () => {
   for (const opts of [{ platform: 'win32' }, { platform: 'darwin', arch: 'arm64' }, { platform: 'darwin', arch: 'x64' }]) {
-    assert.equal(selectAsset(REAL_ASSETS, { config: PEARSHEET, ...opts }), null, JSON.stringify(opts))
+    assert.equal(selectAsset(REAL_ASSETS, { config: PEAROFFICE, ...opts }), null, JSON.stringify(opts))
   }
 })
 
-test('PearSheet: with no helper, the .deb goes through pkexec dpkg -i and the app relaunches', async () => {
+test('PearOffice: with no helper, the .deb goes through pkexec dpkg -i and the app relaunches', async () => {
   const r = recorder()
   const out = await applyUpdate({ applier: 'deb', version: '0.2.0' }, {
-    config: PEARSHEET, file: '/tmp/pearsheet-0.2.0-linux-amd64.deb', digest: 'e'.repeat(64), exec: r.exec,
+    config: PEAROFFICE, file: '/tmp/pearoffice-0.2.0-linux-amd64.deb', digest: 'e'.repeat(64), exec: r.exec,
     fsImpl: { existsSync: () => { throw new Error('there is no helper to look for') } }
   })
-  assert.deepEqual(r.calls, ['pkexec dpkg -i /tmp/pearsheet-0.2.0-linux-amd64.deb'])
+  assert.deepEqual(r.calls, ['pkexec dpkg -i /tmp/pearoffice-0.2.0-linux-amd64.deb'])
   assert.deepEqual(out, { restarted: false, needsRelaunch: true, via: 'pkexec-dpkg', applier: 'deb', version: '0.2.0' })
 })
 
-test('PearSheet: a cancelled password prompt is an error, not an update', async () => {
+test('PearOffice: a cancelled password prompt is an error, not an update', async () => {
   const body = 'deb bytes'
   const digest = crypto.createHash('sha256').update(body).digest('hex')
   let relaunched = 0
   const applier = new UpdateApplier({
-    config: PEARSHEET,
+    config: PEAROFFICE,
     getUpdate: () => SHEET_UPDATE,
     platform: 'linux',
     target: '',
@@ -668,13 +668,13 @@ test('PearSheet: a cancelled password prompt is an error, not an update', async 
   assert.equal(relaunched, 0)
 })
 
-test('PearSheet: the full .deb apply ends in a relaunch', async () => {
+test('PearOffice: the full .deb apply ends in a relaunch', async () => {
   const body = 'deb bytes'
   const digest = crypto.createHash('sha256').update(body).digest('hex')
   const r = recorder()
   let relaunched = 0
   const applier = new UpdateApplier({
-    config: PEARSHEET,
+    config: PEAROFFICE,
     getUpdate: () => SHEET_UPDATE,
     platform: 'linux',
     target: '',
@@ -684,29 +684,29 @@ test('PearSheet: the full .deb apply ends in a relaunch', async () => {
   })
   const s = await applier.apply()
   assert.deepEqual(s, { status: 'restarting', version: '0.2.0', via: 'self' })
-  assert.equal(r.calls.length, 1, 'no supervisor query: PearSheet has no unit')
-  assert.match(r.calls[0], /^pkexec dpkg -i .*pearsheet-0\.2\.0-linux-amd64\.deb$/)
+  assert.equal(r.calls.length, 1, 'no supervisor query: PearOffice has no unit')
+  assert.match(r.calls[0], /^pkexec dpkg -i .*pearoffice-0\.2\.0-linux-amd64\.deb$/)
   assert.equal(relaunched, 1)
 })
 
-test('PearSheet: on Windows with no service the installer runs detached and the app quits', async () => {
+test('PearOffice: on Windows with no service the installer runs detached and the app quits', async () => {
   const r = recorder()
   const out = await applyUpdate({ applier: 'windows', version: '0.2.0' },
-    { config: PEARSHEET, file: 'C:\\tmp\\PearSheet-Setup-0.2.0.exe', exec: r.exec })
+    { config: PEAROFFICE, file: 'C:\\tmp\\PearOffice-Setup-0.2.0.exe', exec: r.exec })
   assert.equal(r.calls.length, 1)
   assert.match(r.calls[0], /Win32_Process/, 'detached, or it dies with the app when the app quits')
-  assert.match(r.calls[0], /CommandLine='"C:\\tmp\\PearSheet-Setup-0\.2\.0\.exe" \/S --force-run'/)
+  assert.match(r.calls[0], /CommandLine='"C:\\tmp\\PearOffice-Setup-0\.2\.0\.exe" \/S --force-run'/)
   assert.deepEqual(out, { restarted: false, needsQuit: true, via: 'installer', applier: 'windows', version: '0.2.0' })
 })
 
-test('PearSheet: the driver turns needsQuit into restarting and calls onQuit', async () => {
+test('PearOffice: the driver turns needsQuit into restarting and calls onQuit', async () => {
   const body = 'exe bytes'
   const digest = crypto.createHash('sha256').update(body).digest('hex')
   const r = recorder({ 'sc.exe': 'RUNNING' })
   let quit = 0
   let relaunched = 0
   const applier = new UpdateApplier({
-    config: PEARSHEET,
+    config: PEAROFFICE,
     getUpdate: () => SHEET_UPDATE,
     platform: 'win32',
     arch: 'x64',
@@ -722,17 +722,17 @@ test('PearSheet: the driver turns needsQuit into restarting and calls onQuit', a
   assert.ok(!r.calls.some(c => c.startsWith('sc.exe')), 'no service query for an app with no service')
 })
 
-test('PearSheet: the macOS swap checks the PearSheet bundle against the team', async () => {
+test('PearOffice: the macOS swap checks the PearOffice bundle against the team', async () => {
   const body = 'dmg bytes'
   const digest = crypto.createHash('sha256').update(body).digest('hex')
   const r = recorder({ 'codesign -dv': TEAM_OK })
   let relaunched = 0
   const applier = new UpdateApplier({
-    config: PEARSHEET,
+    config: PEAROFFICE,
     getUpdate: () => SHEET_UPDATE,
     platform: 'darwin',
     arch: 'x64',
-    execPath: '/Applications/PearSheet.app/Contents/MacOS/PearSheet',
+    execPath: '/Applications/PearOffice.app/Contents/MacOS/PearOffice',
     exec: r.exec,
     fsImpl: { existsSync: () => { throw new Error('no daemon to look for') } },
     fetchImpl: stubFetch(urlsFor(SHEET_ASSETS, body, digest)),
@@ -740,9 +740,9 @@ test('PearSheet: the macOS swap checks the PearSheet bundle against the team', a
   })
   const s = await applier.apply()
   assert.deepEqual(s, { status: 'restarting', version: '0.2.0', via: 'self' })
-  assert.match(r.calls[0], /^hdiutil attach .*\/tmp\/pearsheet-update-\d+ .*PearSheet-0\.2\.0-mac-x64\.dmg$/)
-  assert.ok(r.calls.some(c => /^ditto \/tmp\/pearsheet-update-\d+\/PearSheet\.app \/Applications\/PearSheet\.app\.new$/.test(c)), 'staged from the mounted PearSheet.app')
-  assert.ok(r.calls.includes('mv /Applications/PearSheet.app.new /Applications/PearSheet.app'))
+  assert.match(r.calls[0], /^hdiutil attach .*\/tmp\/pearoffice-update-\d+ .*PearOffice-0\.2\.0-mac-x64\.dmg$/)
+  assert.ok(r.calls.some(c => /^ditto \/tmp\/pearoffice-update-\d+\/PearOffice\.app \/Applications\/PearOffice\.app\.new$/.test(c)), 'staged from the mounted PearOffice.app')
+  assert.ok(r.calls.includes('mv /Applications/PearOffice.app.new /Applications/PearOffice.app'))
   assert.equal(relaunched, 1)
 })
 
@@ -791,11 +791,11 @@ test('the download folder is removed after a failed verify too', async () => {
 
 test('a Windows installer keeps its file: the app quits while it still runs', async () => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'plh-dl-'))
-  const { applier } = applierFor({ config: PEARSHEET, platform: 'win32', tmpDir }, { release: SHEET_UPDATE })
+  const { applier } = applierFor({ config: PEAROFFICE, platform: 'win32', tmpDir }, { release: SHEET_UPDATE })
   const s = await applier.apply()
   assert.equal(s.via, 'installer')
   assert.equal(downloads(tmpDir).length, 0, 'other slugs untouched')
-  assert.equal(fs.readdirSync(tmpDir).filter((n) => n.startsWith('pearsheet-update-')).length, 1)
+  assert.equal(fs.readdirSync(tmpDir).filter((n) => n.startsWith('pearoffice-update-')).length, 1)
   fs.rmSync(tmpDir, { recursive: true, force: true })
 })
 
