@@ -182,6 +182,13 @@ What the optional parts change:
 - `linux.unit`, `windows.service`, `mac.daemonPlist` + `mac.hostArgv`: the app
   runs under a service manager. Leave them null for a plain tray app and no
   service is looked for.
+- `mac.pkgRequestDir`: the app ships as a `.pkg` and runs as a service under
+  a person's account, which cannot run `installer`. The apply writes
+  `apply.json` (`pkgPath`, `sha256`, `version`) into this folder for a root
+  LaunchDaemon installed by the package (PeerLoom Seeder's
+  `packaging/macos/updater-helper.sh`), which checks the digest, signing team,
+  notarization and version again before installing. The download is kept for
+  it. Null means the `.dmg` swap above.
 - `linux.debHelper`: a root-owned helper plus polkit rule installed by the .deb,
   which re-checks the digest as root. Null means `pkexec dpkg -i <file>` (the
   desktop asks for a password), then the app relaunches.

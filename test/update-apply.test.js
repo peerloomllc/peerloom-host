@@ -327,7 +327,7 @@ test('the unwired paths throw instead of reporting a success they did not have',
   await assert.rejects(
     () => applyUpdate({ applier: 'flatpak', version: '1.1.0' }, { config, file: '/tmp/x', exec: async () => '' }),
     (e) => e.code === 'NEEDS_MANUAL', 'an unknown applier must refuse')
-  assert.deepEqual(Object.keys(APPLIERS).sort(), ['appimage', 'deb', 'macapp', 'windows'])
+  assert.deepEqual(Object.keys(APPLIERS).sort(), ['appimage', 'deb', 'macapp', 'macpkg', 'windows'])
 })
 
 // --- the UpdateApplier driver --------------------------------------------------------
@@ -815,4 +815,68 @@ test('old download folders are cleared on the next start, young ones kept', () =
   new UpdateApplier({ config, getUpdate: () => null, tmpDir }) // eslint-disable-line no-new
   assert.deepEqual(fs.readdirSync(tmpDir), [path.basename(other)])
   fs.rmSync(tmpDir, { recursive: true, force: true })
+})
+
+// A service that runs as a person hands a .pkg to a root helper (PeerLoom Seeder).
+const PKG_CONFIG = {
+  slug: 'peerloom-seeder',
+  repo: 'peerloomllc/peerloom-seeder',
+  assets: { darwinArm64: /^PeerLoomSeeder-.*-arm64\.pkg$/, darwinX64: /^PeerLoomSeeder-.*-x64\.pkg$/ },
+  mac: { teamId: 'G79ALD29NA', pkgRequestDir: null }
+}
+
+test('a .pkg request dir makes the Mac plan a macpkg one', () => {
+  const assets = withSidecars(['PeerLoomSeeder-1.1.0-arm64.pkg', 'PeerLoomSeeder-1.1.0-x64.pkg'])
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pkgreq-'))
+  const cfg = { ...PKG_CONFIG, mac: { ...PKG_CONFIG.mac, pkgRequestDir: dir } }
+  const plan = planApply(UPDATE, assets, { config: cfg, platform: 'darwin', arch: 'x64' })
+  assert.equal(plan.applier, 'macpkg')
+  assert.equal(plan.name, 'PeerLoomSeeder-1.1.0-x64.pkg')
+  assert.equal(planApply(UPDATE, ASSETS, { config, platform: 'darwin', arch: 'arm64' }).applier, 'macapp')
+  fs.rmSync(dir, { recursive: true })
+})
+
+test('macpkg writes one whole request for the helper and keeps the download', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pkgreq-'))
+  const cfg = { ...PKG_CONFIG, mac: { ...PKG_CONFIG.mac, pkgRequestDir: dir } }
+  const out = await applyUpdate({ applier: 'macpkg', version: '1.1.0' }, { config: cfg, file: '/tmp/x/PeerLoomSeeder-1.1.0-arm64.pkg', digest: 'ab'.repeat(32) })
+  assert.deepEqual(out, { restarted: true, via: 'pkg-helper', keepDownload: true, applier: 'macpkg', version: '1.1.0' })
+  assert.deepEqual(fs.readdirSync(dir), ['apply.json'])
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(dir, 'apply.json'), 'utf8')), { pkgPath: '/tmp/x/PeerLoomSeeder-1.1.0-arm64.pkg', sha256: 'ab'.repeat(32), version: '1.1.0' })
+  fs.rmSync(dir, { recursive: true })
+  await assert.rejects(
+    () => applyUpdate({ applier: 'macpkg', version: '1.1.0' }, { config: cfg, file: '/tmp/x.pkg', digest: 'ab'.repeat(32) }),
+    (e) => e.code === 'NEEDS_MANUAL', 'no request dir must refuse')
+})
+
+test('an applied .pkg keeps its download for the helper', async () => {
+  const body = Buffer.from('pkg bytes')
+  const digest = crypto.createHash('sha256').update(body).digest('hex')
+  const name = 'PeerLoomSeeder-1.1.0-arm64.pkg'
+  const reqDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pkgreq-'))
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pkgtmp-'))
+  const cfg = { ...PKG_CONFIG, mac: { ...PKG_CONFIG.mac, pkgRequestDir: reqDir } }
+  const fetchImpl = async (url) => ({
+    ok: true,
+    status: 200,
+    arrayBuffer: async () => body,
+    text: async () => digest + '  ' + name + '\n'
+  })
+  const update = { available: true, latest: '1.1.0', current: '1.0.0', assets: withSidecars([name]) }
+  const applier = new UpdateApplier({ config: cfg, getUpdate: () => update, platform: 'darwin', arch: 'arm64', exec: async () => '', fetchImpl, tmpDir })
+  const state = await applier.apply()
+  assert.equal(state.status, 'restarting')
+  assert.equal(state.via, 'pkg-helper')
+  const req = JSON.parse(fs.readFileSync(path.join(reqDir, 'apply.json'), 'utf8'))
+  assert.equal(req.sha256, digest)
+  assert.ok(fs.existsSync(req.pkgPath), 'the helper still needs the file')
+  fs.rmSync(reqDir, { recursive: true })
+  fs.rmSync(tmpDir, { recursive: true })
+})
+
+test('a Windows service install keeps the installer file it is still running', async () => {
+  const cmds = []
+  const out = await APPLIERS.windows({ config: PEARTUNE, file: 'C:\\t\\PearTune-Setup-1.1.0.exe', exec: async (argv) => { cmds.push(argv); return '' } })
+  assert.deepEqual(out, { restarted: true, via: 'installer', keepDownload: true })
+  assert.equal(cmds.length, 1)
 })

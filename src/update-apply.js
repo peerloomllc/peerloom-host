@@ -126,7 +126,7 @@ function planApply (update, assets, { config, platform = process.platform, arch 
   }
 
   const applier = platform === 'win32' ? 'windows'
-    : platform === 'darwin' ? 'macapp'
+    : platform === 'darwin' ? ((config.mac || {}).pkgRequestDir ? 'macpkg' : 'macapp')
       : matches(config.assets.appImage, picked.name) ? 'appimage' : 'deb'
 
   return { applier, version: update.latest, ...picked }
@@ -259,7 +259,9 @@ const APPLIERS = {
     await exec(['powershell', '-NoProfile', '-NonInteractive', '-Command',
       `Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{CommandLine='${cmd}'} | Out-Null`])
     // With a service, the installer stops it, replaces the files and starts it again.
-    if (windows.service) return { restarted: true, via: 'installer' }
+    // It is still reading its own file after this returns, so the download stays
+    // (a later start clears it).
+    if (windows.service) return { restarted: true, via: 'installer', keepDownload: true }
     // Without one, the app must exit so its files are free to replace.
     return { restarted: false, needsQuit: true, via: 'installer' }
   },
@@ -311,6 +313,27 @@ const APPLIERS = {
       return { restarted: false, needsRelaunch: true, via: 'dmg-swap', staleDaemon: true }
     }
     return { restarted: false, needsRelaunch: true, via: 'dmg-swap' }
+  },
+
+  // Hand a verified .pkg to a root helper. A service that runs as a person cannot
+  // run `installer`, so the package installed a root LaunchDaemon that watches
+  // `mac.pkgRequestDir` (writable by the service's user only). The request names
+  // the file and its digest; the helper checks the digest again, the Developer ID
+  // team, notarization and that the package is newer than what is installed, then
+  // installs it. The package's postinstall restarts the service, so the download
+  // must outlive this process.
+  macpkg: async ({ config, file, digest, fsImpl }) => {
+    const mac = config.mac || {}
+    const ffs = fsImpl || fs
+    if (!mac.pkgRequestDir || !ffs.existsSync(mac.pkgRequestDir)) {
+      throw new NeedsManualError('this install has no privileged updater - update from the download instead')
+    }
+    const version = versionInName(path.basename(file))
+    const tmp = path.join(mac.pkgRequestDir, `.apply-${process.pid}.json`)
+    // Written aside and renamed, so the helper never reads half a request.
+    ffs.writeFileSync(tmp, JSON.stringify({ pkgPath: file, sha256: digest, version }) + '\n')
+    ffs.renameSync(tmp, path.join(mac.pkgRequestDir, 'apply.json'))
+    return { restarted: true, via: 'pkg-helper', keepDownload: true }
   },
 
   // Installing a .deb needs root.
@@ -424,6 +447,7 @@ class UpdateApplier {
       const target = this._platform === 'darwin' ? macAppRoot(this._execPath) : this._target
       const r = await applyUpdate(plan, { config, file, digest, supervisor, target, exec: this._exec, log: this._log })
 
+      if (r.keepDownload) keepDownload = true
       if (r.needsQuit) {
         keepDownload = true
         this._state = { status: 'restarting', version: plan.version, via: 'installer' }
