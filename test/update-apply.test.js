@@ -873,3 +873,10 @@ test('an applied .pkg keeps its download for the helper', async () => {
   fs.rmSync(reqDir, { recursive: true })
   fs.rmSync(tmpDir, { recursive: true })
 })
+
+test('a Windows service install keeps the installer file it is still running', async () => {
+  const cmds = []
+  const out = await APPLIERS.windows({ config: PEARTUNE, file: 'C:\\t\\PearTune-Setup-1.1.0.exe', exec: async (argv) => { cmds.push(argv); return '' } })
+  assert.deepEqual(out, { restarted: true, via: 'installer', keepDownload: true })
+  assert.equal(cmds.length, 1)
+})

@@ -259,7 +259,9 @@ const APPLIERS = {
     await exec(['powershell', '-NoProfile', '-NonInteractive', '-Command',
       `Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{CommandLine='${cmd}'} | Out-Null`])
     // With a service, the installer stops it, replaces the files and starts it again.
-    if (windows.service) return { restarted: true, via: 'installer' }
+    // It is still reading its own file after this returns, so the download stays
+    // (a later start clears it).
+    if (windows.service) return { restarted: true, via: 'installer', keepDownload: true }
     // Without one, the app must exit so its files are free to replace.
     return { restarted: false, needsQuit: true, via: 'installer' }
   },
